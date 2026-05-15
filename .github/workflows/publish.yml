@@ -1,0 +1,30 @@
+name: Publish Kandelo software
+
+on:
+  workflow_dispatch:
+    inputs:
+      kandelo-ref:
+        description: Kandelo git ref to build against.
+        type: string
+        default: main
+      packages:
+        description: "Package list: all, or comma-separated names."
+        type: string
+        default: all
+      release-tag:
+        description: Optional release tag override. Leave empty for binaries-abi-v<ABI>.
+        type: string
+        default: ""
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    uses: ./.github/workflows/reusable-publish.yml
+    with:
+      kandelo-ref: ${{ inputs.kandelo-ref || 'main' }}
+      packages: ${{ inputs.packages || 'all' }}
+      release-tag: ${{ inputs.release-tag || '' }}

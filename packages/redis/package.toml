@@ -1,0 +1,24 @@
+kind = "program"
+name = "redis"
+version = "7.2.7"
+kernel_abi = 10
+depends_on = []
+
+[source]
+url = "https://github.com/redis/redis/archive/refs/tags/7.2.7.tar.gz"
+sha256 = "fdbdee0a19a12e61c2eca46f4162f6d3ede3a01e0baa8a12cee1f35f3391f1e9"
+
+[license]
+spdx = "BSD-3-Clause"
+url = "https://github.com/redis/redis/blob/7.2/COPYING"
+
+[build]
+script_path = "examples/libs/redis/build-redis.sh"
+
+[[outputs]]
+name = "redis-server"
+wasm = "redis-server.wasm"
+
+[[outputs]]
+name = "redis-cli"
+wasm = "redis-cli.wasm"

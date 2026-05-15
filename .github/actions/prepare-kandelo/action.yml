@@ -1,0 +1,67 @@
+name: Prepare Kandelo
+description: Install build prerequisites, warm Kandelo, and overlay kandelo-software packages.
+
+inputs:
+  kandelo-root:
+    description: Path to the Kandelo checkout.
+    required: true
+  software-root:
+    description: Path to this repository checkout.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@v22
+
+    - name: Cache Nix store + flake eval
+      uses: DeterminateSystems/magic-nix-cache-action@v13
+      with:
+        use-gha-cache: false
+
+    - name: Install Erlang/OTP for Erlang package builds
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: "28"
+
+    - name: Fetch Kandelo musl submodule
+      shell: bash
+      run: |
+        git -C "${{ inputs.kandelo-root }}" config --global url."https://github.com/".insteadOf "git@github.com:"
+        git -C "${{ inputs.kandelo-root }}" submodule update --init --depth 1 musl
+
+    - name: Cache Cargo and Kandelo sysroots
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ${{ inputs.kandelo-root }}/target
+          ${{ inputs.kandelo-root }}/sysroot
+          ${{ inputs.kandelo-root }}/sysroot64
+        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/examples/libs/libcxx/**') }}
+        restore-keys: |
+          kandelo-software-${{ runner.os }}-
+
+    - name: Overlay package recipes
+      shell: bash
+      run: |
+        bash "${{ inputs.software-root }}/scripts/sync-packages.sh" "${{ inputs.kandelo-root }}"
+
+    - name: Warm Kandelo dev shell and sysroots
+      shell: bash
+      run: |
+        cd "${{ inputs.kandelo-root }}"
+        bash scripts/dev-shell.sh true
+        bash scripts/dev-shell.sh bash scripts/build-musl.sh
+        bash scripts/dev-shell.sh bash scripts/build-musl.sh --arch wasm64posix
+
+    - name: Install JavaScript build prerequisites
+      shell: bash
+      run: |
+        cd "${{ inputs.kandelo-root }}"
+        bash scripts/dev-shell.sh bash -c '
+          npm install --no-audit --no-fund
+          cd host && npm install --no-audit --no-fund
+          cd ../examples/browser && npm install --no-audit --no-fund
+        '

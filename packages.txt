@@ -1,0 +1,10 @@
+cpython
+erlang
+perl
+redis
+ruby
+texlive
+nethack
+python-vfs
+perl-vfs
+erlang-vfs

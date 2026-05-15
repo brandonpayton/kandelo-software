@@ -1,0 +1,67 @@
+name: Reusable Kandelo software publish
+
+on:
+  workflow_call:
+    inputs:
+      kandelo-repository:
+        type: string
+        default: brandonpayton/wasm-posix-kernel
+      kandelo-ref:
+        type: string
+        default: main
+      packages:
+        type: string
+        default: all
+      release-tag:
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kandelo-software-publish-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440
+    steps:
+      - name: Checkout kandelo-software
+        uses: actions/checkout@v4
+        with:
+          path: kandelo-software
+
+      - name: Checkout Kandelo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.kandelo-repository }}
+          ref: ${{ inputs.kandelo-ref }}
+          path: kandelo
+          submodules: false
+
+      - name: Prepare Kandelo
+        uses: ./kandelo-software/.github/actions/prepare-kandelo
+        with:
+          kandelo-root: ${{ github.workspace }}/kandelo
+          software-root: ${{ github.workspace }}/kandelo-software
+
+      - name: Build and publish selected packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_SELECTION: ${{ inputs.packages }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          args=(
+            --software-root "$GITHUB_WORKSPACE/kandelo-software"
+            --kandelo-root "$GITHUB_WORKSPACE/kandelo"
+            --packages "$PACKAGE_SELECTION"
+            --repo "${{ github.repository }}"
+          )
+          if [ -n "$RELEASE_TAG" ]; then
+            args+=(--target-tag "$RELEASE_TAG")
+          fi
+          cd "$GITHUB_WORKSPACE/kandelo"
+          bash scripts/dev-shell.sh \
+            bash "$GITHUB_WORKSPACE/kandelo-software/scripts/build-and-publish.sh" "${args[@]}"

@@ -1,0 +1,13 @@
+.DS_Store
+/.kandelo/
+/artifacts/
+/tmp/
+packages/*/*-src/
+packages/*/*-build/
+packages/*/*-install/
+packages/*/bin/
+packages/*/runtime/
+packages/*/*.tar.gz
+packages/*/*.tar.xz
+packages/*/*.tgz
+packages/*/*.vfs.zst

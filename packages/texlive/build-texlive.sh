@@ -57,11 +57,22 @@ echo "==> libpng at $LIBPNG_PREFIX"
 if [ ! -d "$SRC_DIR" ]; then
     echo "==> Downloading TeX Live $TEXLIVE_VERSION source..."
     TARBALL="texlive-${TEXLIVE_VERSION}0308-source.tar.xz"
-    curl --retry 10 --retry-delay 5 --retry-max-time 300 --retry-all-errors -fsSL "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/${TEXLIVE_VERSION}/${TARBALL}" \
-        -o "/tmp/${TARBALL}"
+    TARBALL_PATH="/tmp/${TARBALL}"
+    rm -f "$TARBALL_PATH"
+    for url in \
+        "https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/${TEXLIVE_VERSION}/${TARBALL}" \
+        "http://ftp.math.utah.edu/pub/tex/historic/systems/texlive/${TEXLIVE_VERSION}/${TARBALL}"
+    do
+        echo "==> Trying $url"
+        if curl --retry 10 --retry-delay 5 --retry-max-time 300 --retry-all-errors -fsSL "$url" -o "$TARBALL_PATH"; then
+            break
+        fi
+        rm -f "$TARBALL_PATH"
+    done
+    [ -f "$TARBALL_PATH" ] || { echo "ERROR: failed to download $TARBALL" >&2; exit 1; }
     mkdir -p "$SRC_DIR"
-    tar xf "/tmp/${TARBALL}" -C "$SRC_DIR" --strip-components=1
-    rm "/tmp/${TARBALL}"
+    tar xf "$TARBALL_PATH" -C "$SRC_DIR" --strip-components=1
+    rm "$TARBALL_PATH"
 fi
 
 # TeX Live always runs luajit's sub-configure even when all Lua engines are

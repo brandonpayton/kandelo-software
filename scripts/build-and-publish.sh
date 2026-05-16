@@ -38,6 +38,8 @@ BUILD_HOST="${REPOSITORY}@${BUILD_COMMIT}"
 echo "build-and-publish: Kandelo ABI $ABI"
 echo "build-and-publish: target release $REPOSITORY/$TARGET_TAG"
 
+FAILED=()
+
 want_pkg() {
   local pkg="$1"
   if [ "$PACKAGE_SELECTION" = "all" ] || [ -z "$PACKAGE_SELECTION" ]; then
@@ -46,6 +48,54 @@ want_pkg() {
   local normalized
   normalized="$(printf '%s' "$PACKAGE_SELECTION" | tr ',' ' ')"
   [[ " $normalized " == *" $pkg "* ]]
+}
+
+build_publish_one() {
+  local pkg="$1"
+  local version="$2"
+  local revision="$3"
+  local arch="$4"
+  local pkg_dir="$KANDELO_ROOT/examples/libs/$pkg"
+
+  local sha short suffix out_dir archive_path archive_name
+  sha="$(cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
+    compute-cache-key-sha --package "$pkg_dir" --arch "$arch")"
+  short="${sha:0:8}"
+  suffix="-abi${ABI}-${arch}-${short}.tar.zst"
+
+  if gh release view "$TARGET_TAG" --repo "$REPOSITORY" --json assets --jq '[.assets[].name]' 2>/dev/null \
+      | jq -e --arg pre "${pkg}-" --arg suf "$suffix" 'any(.[]; startswith($pre) and endswith($suf))' >/dev/null; then
+    echo "build-and-publish: skip $pkg/$arch ($short already published)"
+    return 0
+  fi
+
+  out_dir="${RUNNER_TEMP:-/tmp}/kandelo-software-staged/$pkg-$arch"
+  rm -rf "$out_dir"
+  mkdir -p "$out_dir"
+
+  echo "build-and-publish: staging $pkg $version rev$revision $arch"
+  cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
+    archive-stage \
+      --package "$pkg_dir" \
+      --arch "$arch" \
+      --out "$out_dir" \
+      --build-timestamp "$BUILD_TIMESTAMP" \
+      --build-host "$BUILD_HOST"
+
+  archive_path="$(find "$out_dir" -name '*.tar.zst' -print -quit)"
+  archive_name="$(basename "$archive_path")"
+
+  "$SOFTWARE_ROOT/scripts/publish-archive.sh" \
+    --kandelo-root "$KANDELO_ROOT" \
+    --repo "$REPOSITORY" \
+    --target-tag "$TARGET_TAG" \
+    --package "$pkg" \
+    --version "$version" \
+    --revision "$revision" \
+    --arch "$arch" \
+    --archive-path "$archive_path" \
+    --archive-name "$archive_name" \
+    --cache-key-sha "$sha"
 }
 
 mapfile -t ordered <"$SOFTWARE_ROOT/packages.txt"
@@ -66,43 +116,15 @@ for pkg in "${ordered[@]}"; do
   arches="${arches:-wasm32}"
 
   for arch in $arches; do
-    sha="$(cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
-      compute-cache-key-sha --package "$pkg_dir" --arch "$arch")"
-    short="${sha:0:8}"
-    suffix="-abi${ABI}-${arch}-${short}.tar.zst"
-
-    if gh release view "$TARGET_TAG" --repo "$REPOSITORY" --json assets --jq '[.assets[].name]' 2>/dev/null \
-        | jq -e --arg pre "${pkg}-" --arg suf "$suffix" 'any(.[]; startswith($pre) and endswith($suf))' >/dev/null; then
-      echo "build-and-publish: skip $pkg/$arch ($short already published)"
-      continue
+    if ! build_publish_one "$pkg" "$version" "$revision" "$arch"; then
+      echo "build-and-publish: WARN $pkg/$arch failed; continuing" >&2
+      FAILED+=("$pkg/$arch")
     fi
-
-    out_dir="${RUNNER_TEMP:-/tmp}/kandelo-software-staged/$pkg-$arch"
-    rm -rf "$out_dir"
-    mkdir -p "$out_dir"
-
-    echo "build-and-publish: staging $pkg $version rev$revision $arch"
-    cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
-      archive-stage \
-        --package "$pkg_dir" \
-        --arch "$arch" \
-        --out "$out_dir" \
-        --build-timestamp "$BUILD_TIMESTAMP" \
-        --build-host "$BUILD_HOST"
-
-    archive_path="$(find "$out_dir" -name '*.tar.zst' -print -quit)"
-    archive_name="$(basename "$archive_path")"
-
-    "$SOFTWARE_ROOT/scripts/publish-archive.sh" \
-      --kandelo-root "$KANDELO_ROOT" \
-      --repo "$REPOSITORY" \
-      --target-tag "$TARGET_TAG" \
-      --package "$pkg" \
-      --version "$version" \
-      --revision "$revision" \
-      --arch "$arch" \
-      --archive-path "$archive_path" \
-      --archive-name "$archive_name" \
-      --cache-key-sha "$sha"
   done
 done
+
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  echo "build-and-publish: ${#FAILED[@]} package build(s) failed:" >&2
+  printf '  %s\n' "${FAILED[@]}" >&2
+  exit 1
+fi

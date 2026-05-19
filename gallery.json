@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "repository": "brandonpayton/kandelo-software",
+  "release_tag": "binaries-abi-v11",
+  "index_url": "index.toml",
+  "entries": [
+    {
+      "id": "python-vfs",
+      "title": "Python VFS",
+      "description": "CPython 3.13 with the standard library staged as a browser VFS image.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "cpython", "version": "3.13.3" },
+        { "name": "python-vfs", "version": "0.1.0" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/python-vfs"
+    },
+    {
+      "id": "perl-vfs",
+      "title": "Perl VFS",
+      "description": "Perl 5.40 with core modules staged as a browser VFS image.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "perl", "version": "5.40.3" },
+        { "name": "perl-vfs", "version": "0.1.0" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/perl-vfs"
+    },
+    {
+      "id": "erlang-vfs",
+      "title": "Erlang VFS",
+      "description": "Erlang/OTP 28 runtime files staged as a browser VFS image.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "erlang", "version": "28.2" },
+        { "name": "erlang-vfs", "version": "0.1.0" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/erlang-vfs"
+    },
+    {
+      "id": "redis-vfs",
+      "title": "Redis VFS",
+      "description": "Redis server boot image with dinit and a writable data directory.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "redis", "version": "7.2.7" },
+        { "name": "redis-vfs", "version": "0.1.0" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/redis-vfs"
+    }
+  ]
+}

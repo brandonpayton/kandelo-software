@@ -1,0 +1,22 @@
+kind = "program"
+name = "redis-vfs"
+version = "0.1.0"
+kernel_abi = 11
+depends_on = ["redis@7.2.7"]
+
+# Pre-built VFS image for the browser Redis demo. Source at
+# examples/browser/scripts/build-redis-vfs-image.ts.
+[source]
+url = "https://github.com/brandonpayton/wasm-posix-kernel"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[license]
+spdx = "BSD-3-Clause"
+url = "https://github.com/redis/redis/blob/7.2/COPYING"
+
+[build]
+script_path = "examples/libs/redis-vfs/build-redis-vfs.sh"
+
+[[outputs]]
+name = "redis-vfs"
+wasm = "redis-vfs.vfs.zst"

@@ -10,6 +10,7 @@ of package recipes and the release index for the archives it publishes.
 packages/<name>/package.toml     # portable recipe
 packages/<name>/build.toml       # this repo's publish/index settings
 packages/<name>/build-<name>.sh  # Kandelo-relative build script
+gallery.json                     # browser-gallery entries gated by index.toml
 ```
 
 The workflow overlays each package into a Kandelo checkout at
@@ -79,3 +80,8 @@ Set `GITHUB_REPOSITORY=brandonpayton/kandelo-software` and authenticate
 If the package has dependent VFS images, list the base program first.
 For example, `cpython` must precede `python-vfs` because the VFS build
 reads the CPython source tree and stdlib staged by the CPython build.
+
+If the package should appear in Kandelo's browser gallery, add an entry
+to `gallery.json`. The gallery entry should list every package that must
+be available for the demo; Kandelo only shows the entry when the release
+`index.toml` marks all of those wasm32 packages as `success`.

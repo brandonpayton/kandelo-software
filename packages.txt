@@ -2,6 +2,7 @@ cpython
 erlang
 perl
 redis
+redis-vfs
 ruby
 nethack
 python-vfs

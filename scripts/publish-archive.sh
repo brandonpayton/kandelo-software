@@ -11,6 +11,7 @@ ARCHIVE_NAME=""
 CACHE_KEY_SHA=""
 KANDELO_ROOT=""
 REPOSITORY="${GITHUB_REPOSITORY:-brandonpayton/kandelo-software}"
+SOFTWARE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -97,5 +98,9 @@ fi
 
 gh release upload "$TARGET_TAG" --repo "$REPOSITORY" --clobber "$ARCHIVE_PATH"
 gh release upload "$TARGET_TAG" --repo "$REPOSITORY" --clobber "$INDEX_PATH"
+
+if [ -f "$SOFTWARE_ROOT/gallery.json" ]; then
+  gh release upload "$TARGET_TAG" --repo "$REPOSITORY" --clobber "$SOFTWARE_ROOT/gallery.json"
+fi
 
 echo "publish-archive: published $ARCHIVE_NAME and updated $TARGET_TAG/index.toml"

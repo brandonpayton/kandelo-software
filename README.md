@@ -14,6 +14,7 @@ temporarily removed from browser-demo rebuilds, plus NetHack:
 | `perl-vfs` | VFS image | Perl standard library image |
 | `ruby` | program | Ruby `ruby.wasm` |
 | `redis` | program | `redis-server.wasm` and `redis-cli.wasm` |
+| `redis-vfs` | VFS image | Redis server boot image |
 | `erlang` | program/runtime | BEAM plus trimmed OTP runtime bundle |
 | `erlang-vfs` | VFS image | Erlang/OTP runtime image |
 | `texlive` | program/runtime | `pdftex.wasm` plus TeX Live bundle |
@@ -70,6 +71,11 @@ The workflow checks out Kandelo, overlays `packages/*` into
 
 The reusable workflow is `.github/workflows/reusable-publish.yml`; the
 setup logic is factored into `.github/actions/prepare-kandelo`.
+
+The release also carries `gallery.json`. Kandelo's browser gallery reads
+that manifest and the same release `index.toml`; entries are shown only
+when every package listed for that entry has a successful wasm32 archive
+in the index.
 
 ## Updating For A New ABI
 

@@ -80,6 +80,9 @@ Set `GITHUB_REPOSITORY=brandonpayton/kandelo-software` and authenticate
 If the package has dependent VFS images, list the base program first.
 For example, `cpython` must precede `python-vfs` because the VFS build
 reads the CPython source tree and stdlib staged by the CPython build.
+If a VFS image builder needs an installed wasm binary at runtime, its
+wrapper should also resolve that package before invoking the image
+builder so subset publishes keep working.
 
 If the package should appear in Kandelo's browser gallery, add an entry
 to `gallery.json`. The gallery entry should list every package that must

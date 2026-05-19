@@ -83,6 +83,10 @@ build_publish_one() {
       --build-host "$BUILD_HOST"
 
   archive_path="$(find "$out_dir" -name '*.tar.zst' -print -quit)"
+  if [ -z "$archive_path" ]; then
+    echo "build-and-publish: no archive produced for $pkg/$arch" >&2
+    return 1
+  fi
   archive_name="$(basename "$archive_path")"
 
   "$SOFTWARE_ROOT/scripts/publish-archive.sh" \

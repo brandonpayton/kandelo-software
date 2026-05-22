@@ -5,7 +5,7 @@ version = "2025"
 # distribution macros + latex.fmt ride alongside pdftex.wasm). Bumped
 # from rev1 to invalidate any cached rev1 archives that only contain
 # pdftex.wasm.
-kernel_abi = 11
+kernel_abi = 12
 depends_on = ["zlib@1.3.1", "libpng@1.6.43"]
 
 [source]
@@ -22,7 +22,7 @@ spdx = "LicenseRef-TeXLive-Various"
 url = "https://www.tug.org/texlive/copying.html"
 
 [build]
-script_path = "examples/libs/texlive/build-texlive.sh"
+script_path = "packages/registry/texlive/build-texlive.sh"
 
 # Two outputs: the wasm engine + the runtime distribution bundle.
 # `place_binaries_symlinks` places both under

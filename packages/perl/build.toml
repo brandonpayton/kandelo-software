@@ -1,4 +1,4 @@
-script_path = "examples/libs/perl/build-perl.sh"
+script_path = "packages/registry/perl/build-perl.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 1

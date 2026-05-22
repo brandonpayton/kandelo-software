@@ -9,3 +9,4 @@ python-vfs
 perl-vfs
 erlang-vfs
 texlive
+clang

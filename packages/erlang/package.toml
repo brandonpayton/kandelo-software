@@ -4,7 +4,7 @@ version = "28.2"
 # rev2: package now ships erlang.wasm + erlang-otp.tar.zst (the trimmed
 # OTP runtime tree erlang-vfs needs). Multi-output, so artifacts land
 # under programs/<arch>/erlang/ instead of programs/<arch>/erlang.wasm.
-kernel_abi = 11
+kernel_abi = 12
 depends_on = []
 
 [source]
@@ -16,7 +16,7 @@ spdx = "Apache-2.0"
 url = "https://github.com/erlang/otp/blob/maint/LICENSE.txt"
 
 [build]
-script_path = "examples/libs/erlang/build-erlang.sh"
+script_path = "packages/registry/erlang/build-erlang.sh"
 
 [[outputs]]
 name = "erlang"

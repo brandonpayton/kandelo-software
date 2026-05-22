@@ -1,7 +1,7 @@
 kind = "program"
 name = "perl"
 version = "5.40.3"
-kernel_abi = 11
+kernel_abi = 12
 depends_on = []
 
 [source]
@@ -13,7 +13,7 @@ spdx = "Artistic-1.0-Perl OR GPL-1.0-or-later"
 url = "https://dev.perl.org/licenses/"
 
 [build]
-script_path = "examples/libs/perl/build-perl.sh"
+script_path = "packages/registry/perl/build-perl.sh"
 
 [[outputs]]
 name = "perl"

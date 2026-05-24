@@ -13,18 +13,11 @@ fi
 SOFTWARE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KANDELO_ROOT="$(cd "$1" && pwd)"
 
-[ -d "$KANDELO_ROOT/examples/libs" ] || {
-  echo "sync-packages: $KANDELO_ROOT does not look like a Kandelo checkout" >&2
-  exit 2
-}
+if [ -x "$KANDELO_ROOT/scripts/sync-package-source.sh" ]; then
+  exec "$KANDELO_ROOT/scripts/sync-package-source.sh" \
+    --package-source-root "$SOFTWARE_ROOT" \
+    --kandelo-root "$KANDELO_ROOT"
+fi
 
-for pkg_dir in "$SOFTWARE_ROOT"/packages/*; do
-  [ -d "$pkg_dir" ] || continue
-  pkg="$(basename "$pkg_dir")"
-  dest="$KANDELO_ROOT/examples/libs/$pkg"
-  rm -rf "$dest"
-  mkdir -p "$dest"
-  cp -R "$pkg_dir"/. "$dest"/
-  find "$dest" -name 'build-*.sh' -exec chmod +x {} +
-  echo "sync-packages: overlaid $pkg"
-done
+echo "sync-packages: $KANDELO_ROOT does not provide scripts/sync-package-source.sh" >&2
+exit 2

@@ -39,7 +39,7 @@ runs:
           ${{ inputs.kandelo-root }}/target
           ${{ inputs.kandelo-root }}/sysroot
           ${{ inputs.kandelo-root }}/sysroot64
-        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/examples/libs/libcxx/**') }}
+        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/packages/registry/libcxx/**') }}
         restore-keys: |
           kandelo-software-${{ runner.os }}-
 
@@ -63,5 +63,5 @@ runs:
         bash scripts/dev-shell.sh bash -c '
           npm install --no-audit --no-fund
           cd host && npm install --no-audit --no-fund
-          cd ../examples/browser && npm install --no-audit --no-fund
+          cd ../apps/browser-demos && npm install --no-audit --no-fund
         '

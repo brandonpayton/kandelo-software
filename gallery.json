@@ -1,7 +1,8 @@
 {
   "schema": 1,
+  "source_id": "kandelo-software",
   "repository": "brandonpayton/kandelo-software",
-  "release_tag": "binaries-abi-v11",
+  "release_tag": "binaries-abi-v12",
   "index_url": "index.toml",
   "entries": [
     {
@@ -47,6 +48,50 @@
         { "name": "redis-vfs", "version": "0.1.0" }
       ],
       "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/redis-vfs"
+    },
+    {
+      "id": "squeak-etoys",
+      "title": "Etoys Home",
+      "description": "Etoys To-Go 5.0 running on the native OpenSmalltalk V3 VM compiled for Kandelo Wasm.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "squeak-v3", "version": "5.0-20260523" },
+        { "name": "squeak-etoys-vfs", "version": "5.0-20260523" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/squeak-etoys-vfs"
+    },
+    {
+      "id": "squeak-breakout",
+      "title": "Etoys Breakout",
+      "description": "A paddle-and-bricks Etoys project launched directly in the native Squeak V3 VM.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "squeak-v3", "version": "5.0-20260523" },
+        { "name": "squeak-etoys-vfs", "version": "5.0-20260523" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/squeak-etoys-vfs"
+    },
+    {
+      "id": "squeak-pinball",
+      "title": "Etoys Pinball",
+      "description": "A CS4K5 Etoys pinball project launched directly in the native Squeak V3 VM.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "squeak-v3", "version": "5.0-20260523" },
+        { "name": "squeak-etoys-vfs", "version": "5.0-20260523" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/squeak-etoys-vfs"
+    },
+    {
+      "id": "squeak-lunar-lander",
+      "title": "Etoys Lunar Lander",
+      "description": "The bundled Etoys lunar lander game launched directly in the native Squeak V3 VM.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "squeak-v3", "version": "5.0-20260523" },
+        { "name": "squeak-etoys-vfs", "version": "5.0-20260523" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/squeak-etoys-vfs"
     }
   ]
 }

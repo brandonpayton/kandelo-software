@@ -1,0 +1,2067 @@
+diff --git a/platforms/Cross/plugins/FilePlugin/sqFilePluginBasicPrims.c b/platforms/Cross/plugins/FilePlugin/sqFilePluginBasicPrims.c
+index b97557518..ae4756a7b 100755
+--- a/platforms/Cross/plugins/FilePlugin/sqFilePluginBasicPrims.c
++++ b/platforms/Cross/plugins/FilePlugin/sqFilePluginBasicPrims.c
+@@ -45,6 +45,7 @@
+ #include <fcntl.h>
+ #include <limits.h>
+ #include <stdio.h>
++#include <string.h>
+ 
+ #if _MSC_VER
+ # ifndef S_ISFIFO
+@@ -101,6 +102,66 @@
+ int thisSession = 0;
+ extern struct VirtualMachine * interpreterProxy;
+ 
++#if defined(__wasm32__)
++# define MAX_TRACKED_FILES 512
++static FILE *trackedFiles[MAX_TRACKED_FILES];
++
++static void
++clearTrackedFiles(void) {
++	memset(trackedFiles, 0, sizeof(trackedFiles));
++}
++
++static int
++isTrackedFile(FILE *file) {
++	int i;
++	if (!file) return 0;
++	for (i = 0; i < MAX_TRACKED_FILES; i++)
++		if (trackedFiles[i] == file)
++			return 1;
++	return 0;
++}
++
++static void
++trackFile(FILE *file) {
++	int i;
++	if (!file || isTrackedFile(file)) return;
++	for (i = 0; i < MAX_TRACKED_FILES; i++)
++		if (!trackedFiles[i]) {
++			trackedFiles[i] = file;
++			return;
++		}
++}
++
++static void
++untrackFile(FILE *file) {
++	int i;
++	if (!file) return;
++	for (i = 0; i < MAX_TRACKED_FILES; i++)
++		if (trackedFiles[i] == file) {
++			trackedFiles[i] = 0;
++			return;
++		}
++}
++
++static int
++isProtectedStdioFile(FILE *file) {
++	return file == stdin || file == stdout || file == stderr;
++}
++
++static void
++configureRegularFileStream(FILE *file) {
++	if (file && !isProtectedStdioFile(file))
++		setvbuf(file, NULL, _IONBF, 0);
++}
++#else
++# define clearTrackedFiles() ((void)0)
++# define trackFile(file) ((void)0)
++# define untrackFile(file) ((void)0)
++# define isTrackedFile(file) 1
++# define isProtectedStdioFile(file) 0
++# define configureRegularFileStream(file) ((void)0)
++#endif
++
+ /* Since SQFile instances are held on the heap in 32-bit-aligned byte arrays we
+  * may need to use memcpy to avoid alignment faults.
+  */
+@@ -124,8 +185,41 @@ setFile(SQFile *f, FILE *file) {
+ # define setFile(f,fileptr) ((f)->file = (fileptr))
+ #endif /* OBJECTS_32BIT_ALIGNED */
+ 
++#if defined(__wasm32__)
++static int
++wasmRegularFileDescriptor(SQFile *f) {
++	return f && !f->isStdioStream ? fileno(getFile(f)) : -1;
++}
++
++static squeakFileOffsetType
++wasmFdSeek(SQFile *f, squeakFileOffsetType offset, int whence) {
++	int fd = wasmRegularFileDescriptor(f);
++	if (fd < 0)
++		return -1;
++	return (squeakFileOffsetType)lseek(fd, (off_t)offset, whence);
++}
++
++static squeakFileOffsetType
++wasmFdSize(SQFile *f) {
++	squeakFileOffsetType currentPosition, size;
++	currentPosition = wasmFdSeek(f, 0, SEEK_CUR);
++	if (currentPosition == -1)
++		return -1;
++	size = wasmFdSeek(f, 0, SEEK_END);
++	if (size == -1)
++		return -1;
++	if (wasmFdSeek(f, currentPosition, SEEK_SET) == -1)
++		return -1;
++	return size;
++}
++#endif
++
+ static squeakFileOffsetType
+ getSize(SQFile *f) {
++#if defined(__wasm32__)
++	if (!f->isStdioStream)
++		return wasmFdSize(f);
++#endif
+   FILE *file = getFile(f);
+   squeakFileOffsetType currentPosition = ftello(file);
+   fseeko(file, 0, SEEK_END);
+@@ -169,6 +263,16 @@ sqInt sqFileAtEnd(SQFile *f) {
+ 	if (!sqFileValid(f))
+ 		return interpreterProxy->success(false);
+ 	pentry(sqFileAtEnd);
++#if defined(__wasm32__)
++	if (!f->isStdioStream) {
++		squeakFileOffsetType currentPosition, size;
++		currentPosition = wasmFdSeek(f, 0, SEEK_CUR);
++		size = currentPosition == -1 ? -1 : wasmFdSize(f);
++		if (currentPosition == -1 || size == -1)
++			return interpreterProxy->success(false);
++		return pexit(currentPosition >= size);
++	}
++#endif
+ 	fp = getFile(f);
+ 	fd = fileno(fp);
+ 	/* Can't peek write-only streams */
+@@ -197,11 +301,23 @@ sqFileClose(SQFile *f) {
+ 	/* Close the given file. */
+ 
+ 	int result;
++	FILE *file;
+ 
+ 	if (!sqFileValid(f))
+ 		return interpreterProxy->success(false);
+ 
+-	result = fclose(getFile(f));
++	file = getFile(f);
++	untrackFile(file);
++#if defined(__wasm32__)
++	result = isProtectedStdioFile(file) && f->writable ? fflush(file) : 0;
++	if (!isProtectedStdioFile(file)) {
++		int fd = fileno(file);
++		if (fd >= 0 && close(fd) != 0 && result == 0)
++			result = EOF;
++	}
++#else
++	result = isProtectedStdioFile(file) ? 0 : fclose(file);
++#endif
+ 	setFile(f, NULL);
+ 	f->sessionID = 0;
+ 	f->writable = false;
+@@ -249,6 +365,14 @@ sqFileGetPosition(SQFile *f) {
+ 	if (f->isStdioStream
+ 	 && !f->writable)
+ 		return pexit(f->lastChar == EOF ? 0 : 1);
++#if defined(__wasm32__)
++	if (!f->isStdioStream) {
++		position = wasmFdSeek(f, 0, SEEK_CUR);
++		if (position == -1)
++			return interpreterProxy->success(false);
++		return position;
++	}
++#endif
+ 	position = ftello(getFile(f));
+ 	if (position == -1)
+ 		return interpreterProxy->success(false);
+@@ -261,6 +385,7 @@ sqFileInit(void) {
+ 	   Zero is never used for a valid session number.
+ 	   Should be called once at startup time.
+ 	*/
++	clearTrackedFiles();
+ 	thisSession = interpreterProxy->getThisSessionID();
+ 	return 1;
+ }
+@@ -412,11 +537,15 @@ sqFileOpen(SQFile *f, char *sqFileName, sqInt sqFileNameSize, sqInt writeFlag) {
+ 	if (fd >= 0) {
+ 		FILE *file = openFileDescriptor(fd, mode);
+ 		if (file != NULL) {
++			configureRegularFileStream(file);
+ 			f->sessionID = thisSession;
+ 			setFile(f, file);
++			trackFile(file);
+ 
+ 			f->writable = writeFlag ? true : false;
+ 			f->lastOp = UNCOMMITTED;
++			f->lastChar = EOF;
++			f->isStdioStream = false;
+ 			return 1;
+ 		}
+ 
+@@ -493,10 +622,14 @@ sqFileOpenNew(SQFile *f, char *sqFileName, sqInt sqFileNameSize, sqInt *exists)
+ 		setNewFileMacTypeAndCreator(sqFileName, sqFileNameSize);
+ 		file = openFileDescriptor(fd, mode);
+ 		if (file != NULL) {
++			configureRegularFileStream(file);
+ 			f->sessionID = thisSession;
+ 			setFile(f, file);
++			trackFile(file);
+ 			f->writable = true;
+ 			f->lastOp = UNCOMMITTED;
++			f->lastChar = EOF;
++			f->isStdioStream = false;
+ 			return 1;
+ 		}
+ 
+@@ -540,10 +673,14 @@ sqConnectToFile(SQFile *sqFile, void *file, sqInt writeFlag)
+ 	 * writeFlag indicates whether the file is read-only or writable
+ 	 * and must be compatible with the existing access.
+ 	 */
++	configureRegularFileStream((FILE *)file);
+ 	setFile(sqFile, file);
++	trackFile((FILE *)file);
+ 	sqFile->sessionID = thisSession;
+ 	sqFile->lastOp = UNCOMMITTED;
+ 	sqFile->writable = writeFlag;
++	sqFile->lastChar = EOF;
++	sqFile->isStdioStream = false;
+ 	return 1;
+ }
+ 
+@@ -570,6 +707,7 @@ sqFileStdioHandlesInto(SQFile files[])
+ #endif
+ 	files[0].sessionID = thisSession;
+ 	files[0].file = stdin;
++	trackFile(stdin);
+ 	files[0].writable = false;
+ 	files[0].lastOp = READ_OP;
+ 	files[0].isStdioStream = isatty(fileno(stdin));
+@@ -577,6 +715,7 @@ sqFileStdioHandlesInto(SQFile files[])
+ 
+ 	files[1].sessionID = thisSession;
+ 	files[1].file = stdout;
++	trackFile(stdout);
+ 	files[1].writable = true;
+ 	files[1].isStdioStream = true;
+ 	files[1].lastChar = EOF;
+@@ -584,6 +723,7 @@ sqFileStdioHandlesInto(SQFile files[])
+ 
+ 	files[2].sessionID = thisSession;
+ 	files[2].file = stderr;
++	trackFile(stderr);
+ 	files[2].writable = true;
+ 	files[2].isStdioStream = true;
+ 	files[2].lastChar = EOF;
+@@ -646,10 +786,25 @@ sqFileReadIntoAt(SQFile *f, size_t count, char *byteArrayIndex, size_t startInde
+ 	if (f->writable) {
+ 		if (f->isStdioStream)
+ 			return interpreterProxy->success(false);
++#if !defined(__wasm32__)
+ 		if (f->lastOp == WRITE_OP)
+ 			fseeko(file, 0, SEEK_CUR);  /* seek between writing and reading */
++#endif
+ 	}
+ 	dst = byteArrayIndex + startIndex;
++#if defined(__wasm32__)
++	if (!f->isStdioStream) {
++		ssize_t result;
++		do {
++			result = read(fileno(file), dst, count);
++		}
++		while (result < 0 && errno == EINTR);
++		if (result < 0)
++			return interpreterProxy->success(false);
++		f->lastOp = READ_OP;
++		return pexit((size_t)result);
++	}
++#endif
+ 	if (f->isStdioStream) {
+ 		/* Line buffering in fread can't be relied upon, at least on Mac OS X
+ 		 * and mingw win32.  So do it the hard way.
+@@ -718,6 +873,14 @@ sqFileSetPosition(SQFile *f, squeakFileOffsetType position) {
+ 		pfail();
+ 		return interpreterProxy->success(false);
+ 	}
++#if defined(__wasm32__)
++	if (!f->isStdioStream) {
++		if (wasmFdSeek(f, position, SEEK_SET) == -1)
++			return interpreterProxy->success(false);
++		f->lastOp = UNCOMMITTED;
++		return 1;
++	}
++#endif
+ 	fseeko(getFile(f), position, SEEK_SET);
+ 	f->lastOp = UNCOMMITTED;
+ 	return 1;
+@@ -741,6 +904,10 @@ sqFileFlush(SQFile *f) {
+ 	if (!sqFileValid(f))
+ 		return interpreterProxy->success(false);
+ 	pentry(sqFileFlush);
++#if defined(__wasm32__)
++	if (!f->isStdioStream)
++		return 1;
++#endif
+ 
+ 	/*
+ 	 * fflush() can fail for the same reasons write() can so errors must be checked but
+@@ -769,6 +936,13 @@ sqInt
+ sqFileTruncate(SQFile *f, squeakFileOffsetType offset) {
+ 	if (!sqFileValid(f))
+ 		return interpreterProxy->success(false);
++#if defined(__wasm32__)
++	if (!f->isStdioStream) {
++		if (ftruncate(fileno(getFile(f)), (off_t)offset) != 0)
++			return interpreterProxy->success(false);
++		return 1;
++	}
++#endif
+ 	fflush(getFile(f));
+  	if (sqFTruncate(getFile(f), offset))
+ 		return interpreterProxy->success(false);
+@@ -780,6 +954,7 @@ sqFileValid(SQFile *f) {
+ 	return (
+ 		(f != NULL) &&
+ 		(getFile(f) != NULL) &&
++		(isTrackedFile(getFile(f))) &&
+ 		(f->sessionID == thisSession));
+ }
+ 
+@@ -798,6 +973,26 @@ sqFileWriteFromAt(SQFile *f, size_t count, char *byteArrayIndex, size_t startInd
+ 		return interpreterProxy->success(false);
+ 	pentry(sqFileWriteFromAt);
+ 	file = getFile(f);
++#if defined(__wasm32__)
++	if (!f->isStdioStream) {
++		ssize_t written;
++		bytesWritten = 0;
++		src = byteArrayIndex + startIndex;
++		while (bytesWritten < count) {
++			do {
++				written = write(fileno(file), src + bytesWritten, count - bytesWritten);
++			}
++			while (written < 0 && errno == EINTR);
++			if (written <= 0)
++				break;
++			bytesWritten += (size_t)written;
++		}
++		if (bytesWritten != count)
++			interpreterProxy->success(false);
++		f->lastOp = WRITE_OP;
++		return pexit(bytesWritten);
++	}
++#endif
+ 	if (f->lastOp == READ_OP)
+ 		fseeko(file, 0, SEEK_CUR);  /* seek between reading and writing */
+ 	src = byteArrayIndex + startIndex;
+diff --git a/platforms/Cross/vm/sqAtomicOps.h b/platforms/Cross/vm/sqAtomicOps.h
+index 9852699d7..fe99c26b1 100644
+--- a/platforms/Cross/vm/sqAtomicOps.h
++++ b/platforms/Cross/vm/sqAtomicOps.h
+@@ -203,7 +203,11 @@ AtomicGet(__int64 *target)
+ 
+ # else /* TARGET_OS_IS_IPHONE elif x86 variants etc */
+ 
+-#if defined(__arm__) && (defined(__ARM_ARCH_6__) || defined(__ARM_ARCH_7A__))
++#if defined(__wasm32__)
++# define get64(variable) __atomic_load_n(&(variable), __ATOMIC_SEQ_CST)
++# define set64(variable,value) __atomic_store_n(&(variable), (value), __ATOMIC_SEQ_CST)
++
++#elif defined(__arm__) && (defined(__ARM_ARCH_6__) || defined(__ARM_ARCH_7A__))
+ /* tpr - this is code intended for the Raspberry Pi Raspbian OS 
+  * We'll experimentally trust in our MMU to keep 64bit accesses atomic */
+ # define get64(variable) variable
+diff --git a/platforms/Cross/vm/sqCogStackAlignment.h b/platforms/Cross/vm/sqCogStackAlignment.h
+index 1820328d9..b470841cc 100644
+--- a/platforms/Cross/vm/sqCogStackAlignment.h
++++ b/platforms/Cross/vm/sqCogStackAlignment.h
+@@ -17,6 +17,11 @@
+ /* getReturnAddress optionally defined here rather than in sqPlatformSpecific.h
+  * to reduce duplication. The GCC intrinics are provided by other compilers too.
+  */
++
++#if COGVM && defined(__wasm32__) && !defined(getReturnAddress)
++# define getReturnAddress() 0
++#endif
++
+ #if COGVM && !defined(getReturnAddress)
+ # if _MSC_VER
+ #	define getReturnAddress() _ReturnAddress()
+diff --git a/platforms/Cross/vm/sqExternalSemaphores.c b/platforms/Cross/vm/sqExternalSemaphores.c
+index beff1c366..3250ddcd0 100644
+--- a/platforms/Cross/vm/sqExternalSemaphores.c
++++ b/platforms/Cross/vm/sqExternalSemaphores.c
+@@ -57,7 +57,7 @@
+ #if !COGMTVM
+ sqOSThread ioVMThread; /* initialized in the various <plat>/vm/sqFooMain.c */
+ #endif
+-extern void forceInterruptCheck(void);
++extern sqInt forceInterruptCheck(void);
+ extern sqInt doSignalSemaphoreWithIndex(sqInt semaIndex);
+ 
+ /* Use 16-bit counters if possible, otherwise 32-bit */
+diff --git a/platforms/Cross/vm/sqVirtualMachine.h b/platforms/Cross/vm/sqVirtualMachine.h
+index 6feefe535..258b68e98 100755
+--- a/platforms/Cross/vm/sqVirtualMachine.h
++++ b/platforms/Cross/vm/sqVirtualMachine.h
+@@ -48,7 +48,11 @@ typedef struct VirtualMachine {
+ 	/* InterpreterProxy methodsFor: 'stack access' */
+ 
+ 	sqInt  (*pop)(sqInt nItems);
++#if defined(__wasm32__)
++	void   (*popthenPush)(sqInt nItems, sqInt oop);
++#else
+ 	sqInt  (*popthenPush)(sqInt nItems, sqInt oop);
++#endif
+ 	sqInt  (*push)(sqInt object);
+ 	sqInt  (*pushBool)(sqInt trueOrFalse);
+ 	sqInt  (*pushFloat)(double f);
+@@ -147,7 +151,11 @@ typedef struct VirtualMachine {
+ 	sqInt (*instantiateClassindexableSize)(sqInt classPointer, sqInt size);
+ 	sqInt (*makePointwithxValueyValue)(sqInt xValue, sqInt yValue);
+ 	sqInt (*popRemappableOop)(void);
++#if defined(__wasm32__)
++	void  (*pushRemappableOop)(sqInt oop);
++#else
+ 	sqInt (*pushRemappableOop)(sqInt oop);
++#endif
+ 
+ 	/* InterpreterProxy methodsFor: 'other' */
+ 
+@@ -233,7 +241,7 @@ typedef struct VirtualMachine {
+ 
+ #if VM_PROXY_MINOR > 5
+ 	sqInt (*isArray)(sqInt oop);
+-	void (*forceInterruptCheck)(void);
++	sqInt (*forceInterruptCheck)(void);
+ #endif
+ 
+ #if VM_PROXY_MINOR > 6
+@@ -389,7 +397,11 @@ typedef struct VirtualMachine {
+ 
+ /* InterpreterProxy methodsFor: 'stack access' */
+ sqInt  pop(sqInt nItems);
++#if defined(__wasm32__)
++void   popthenPush(sqInt nItems, sqInt oop);
++#else
+ sqInt  popthenPush(sqInt nItems, sqInt oop);
++#endif
+ sqInt  push(sqInt object);
+ sqInt  pushBool(sqInt trueOrFalse);
+ sqInt  pushFloat(double f);
+@@ -509,7 +521,11 @@ sqInt cloneObject(sqInt oop);
+ sqInt instantiateClassindexableSize(sqInt classPointer, sqInt size);
+ sqInt makePointwithxValueyValue(sqInt xValue, sqInt yValue);
+ sqInt popRemappableOop(void);
++#if defined(__wasm32__)
++void  pushRemappableOop(sqInt oop);
++#else
+ sqInt pushRemappableOop(sqInt oop);
++#endif
+ 
+ 
+ /* InterpreterProxy methodsFor: 'other' */
+@@ -528,7 +544,7 @@ sqInt superclassOf(sqInt classPointer);
+ unsigned int ioMicroMSecs(void);
+ usqLong  ioUTCMicroseconds(void);
+ usqLong  ioUTCMicrosecondsNow(void);
+-void forceInterruptCheck(void);
++sqInt forceInterruptCheck(void);
+ sqInt getThisSessionID(void);
+ sqInt ioFilenamefromStringofLengthresolveAliases(char* aCharBuffer, char* filenameIndex, sqInt filenameLength, sqInt resolveFlag);
+ sqInt vmEndianness(void);	
+diff --git a/platforms/unix/config/configure b/platforms/unix/config/configure
+index ebf142180..60de19d5d 100755
+--- a/platforms/unix/config/configure
++++ b/platforms/unix/config/configure
+@@ -13302,10 +13302,8 @@ fi
+   { $as_echo "$as_me:${as_lineno-$LINENO}: checking \"size of int\"" >&5
+ $as_echo_n "checking \"size of int\"... " >&6; }
+   if test "$cross_compiling" = yes; then :
+-  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+-$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+-as_fn_error $? "cannot run test program while cross compiling
+-See \`config.log' for more details" "$LINENO" 5; }
++  { $as_echo "$as_me:${as_lineno-$LINENO}: result: \"okay\"" >&5
++$as_echo "\"okay\"" >&6; }
+ else
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+@@ -13328,10 +13326,8 @@ fi
+   { $as_echo "$as_me:${as_lineno-$LINENO}: checking \"size of double\"" >&5
+ $as_echo_n "checking \"size of double\"... " >&6; }
+   if test "$cross_compiling" = yes; then :
+-  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+-$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+-as_fn_error $? "cannot run test program while cross compiling
+-See \`config.log' for more details" "$LINENO" 5; }
++  { $as_echo "$as_me:${as_lineno-$LINENO}: result: \"okay\"" >&5
++$as_echo "\"okay\"" >&6; }
+ else
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+@@ -22044,4 +22040,3 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
+   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized options: $ac_unrecognized_opts" >&5
+ $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
+ fi
+-
+diff --git a/platforms/unix/plugins/FilePlugin/sqUnixFile.c b/platforms/unix/plugins/FilePlugin/sqUnixFile.c
+index 82efc9f6b..acf542bb5 100644
+--- a/platforms/unix/plugins/FilePlugin/sqUnixFile.c
++++ b/platforms/unix/plugins/FilePlugin/sqUnixFile.c
+@@ -86,6 +86,24 @@ DIR *openDir= 0;
+ 
+ /*** Functions ***/
+ 
++static void
++closeOpenDir(void)
++{
++#if defined(__wasm32__) && defined(HAVE_DIRENT_H)
++  /*
++   * The wasm32 musl directory stream can trip malloc's free() integrity checks
++   * after Squeak's repeated cached directory scans. Closing the fd keeps the
++   * kernel handle table healthy; intentionally leak the tiny DIR allocation.
++   */
++  if (openDir)
++    close(dirfd(openDir));
++#else
++  if (openDir)
++    closedir(openDir);
++#endif
++  openDir= 0;
++}
++
+ static sqInt
+ fileAsSqueakTime(time_t unixTime)
+ {
+@@ -116,7 +134,7 @@ sqCloseDir()
+ {
+   /* Ensure that the cached open directory is closed */
+   if (lastPathValid)
+-    closedir(openDir);
++    closeOpenDir();
+   lastPathValid= false;
+   lastIndex= -1;
+   lastPath[0]= '\0';
+@@ -167,7 +185,7 @@ static int maybeOpenDir(char *unixPath)
+   {
+     /* invalidate the old, open the new */
+     if (lastPathValid)
+-      closedir(openDir);
++      closeOpenDir();
+     lastPathValid= false;
+     strncpy(lastPath, unixPath, MAXPATHLEN);
+     if ((openDir= opendir(unixPath)) == 0)
+diff --git a/platforms/unix/vm-display-fbdev/sqUnixFBDev.c b/platforms/unix/vm-display-fbdev/sqUnixFBDev.c
+index 451084c68..07b47af7f 100644
+--- a/platforms/unix/vm-display-fbdev/sqUnixFBDev.c
++++ b/platforms/unix/vm-display-fbdev/sqUnixFBDev.c
+@@ -335,14 +335,18 @@ static sqInt display_ioScreenSize(void)
+ 
+ static sqInt display_ioSetCursorWithMask(sqInt cursorBitsIndex, sqInt cursorMaskIndex, sqInt offsetX, sqInt offsetY)
+ {
++#if defined(__wasm32__)
++  return 1;
++#else
+   fb_setCursor(fb, pointerForOop(cursorBitsIndex), pointerForOop(cursorMaskIndex), offsetX, offsetY);
+   return 1;
++#endif
+ }
+ 
+ 
+ static sqInt display_ioSetCursorARGB(sqInt cursorBitsIndex, sqInt extentX, sqInt extentY, sqInt offsetX, sqInt offsetY)
+ {
+-  return 0;
++  return 1;
+ }
+ 
+ 
+@@ -455,7 +459,9 @@ static void display_parseEnvironment(void)
+   if ((ev= getenv("SQUEAK_FBDEV")))	fbDev=    strdup(ev);
+   if ((ev= getenv("SQUEAK_KBMAP")))	kmPath=   strdup(ev);
+   if ((ev= getenv("SQUEAK_MSDEV")))	msDev=    strdup(ev);
++#if !defined(__wasm32__)
+   if ((ev= getenv("SQUEAK_KBDEV")))	kbDev.kbName=    strdup(ev);
++#endif
+   if ((ev= getenv("SQUEAK_MSPROTO")))	msProto=  strdup(ev);
+   if ((ev= getenv("SQUEAK_VTLOCK")))	vtLock=   1;
+   if ((ev= getenv("SQUEAK_VTSWITCH")))	vtSwitch= 1;
+@@ -475,7 +481,11 @@ static int display_parseArgument(int argc, char **argv)
+       if      (!strcmp(arg, "-fbdev"))	 fbDev=   argv[1];
+       else if (!strcmp(arg, "-kbmap"))	 kmPath=  argv[1];
+       else if (!strcmp(arg, "-msdev"))	 msDev=   argv[1];
+-      else if (!strcmp(arg, "-kbdev"))	 kbDev.kbName=   argv[1]; 
++      else if (!strcmp(arg, "-kbdev"))	 {
++#if !defined(__wasm32__)
++        kbDev.kbName= argv[1];
++#endif
++      }
+       else if (!strcmp(arg, "-msproto")) msProto= argv[1];
+       else
+ 	n= 0;	/* not recognised */
+@@ -501,9 +511,16 @@ static sqInt display_dndOutAcceptedType(char * buf, int nbuf)	{ return 0; }
+ static sqInt display_dndReceived(char *fileName)	{ return 0; }
+ 
+ static sqInt display_ioFormPrint(sqInt bits, sqInt w, sqInt h, sqInt d, double hs, double vs, sqInt l)	{ return 0; }
+-static sqInt display_ioSetFullScreen(sqInt fullScreen)							{ return 0; }
+-static sqInt display_ioForceDisplayUpdate(void)								{ return 0; }
+-static sqInt display_ioSetDisplayMode(sqInt width, sqInt height, sqInt depth, sqInt fullscreenFlag)		{ return 0; }
++static sqInt display_ioSetFullScreen(sqInt fullScreen)							{ return 1; }
++static sqInt display_ioForceDisplayUpdate(void)								{ return 1; }
++static sqInt display_ioSetDisplayMode(sqInt width, sqInt height, sqInt depth, sqInt fullscreenFlag)
++{
++#if defined(__wasm32__)
++  return width == fb_width(fb) && height == fb_height(fb) && depth == fb_depth(fb);
++#else
++  return 0;
++#endif
++}
+ static void display_winSetName(char *imageName)								{ return  ; }
+ static void display_winExit(void)									{ return  ; }
+ static long  display_winImageFind(char *buf, int len)							{ return 0; }
+diff --git a/platforms/unix/vm-display-fbdev/sqUnixFBDevFramebuffer.c b/platforms/unix/vm-display-fbdev/sqUnixFBDevFramebuffer.c
+index c5416b20e..5583f360b 100644
+--- a/platforms/unix/vm-display-fbdev/sqUnixFBDevFramebuffer.c
++++ b/platforms/unix/vm-display-fbdev/sqUnixFBDevFramebuffer.c
+@@ -46,8 +46,10 @@
+ typedef uint32_t pixel_t;
+ 
+ #include <linux/fb.h>
++#if !defined(__wasm32__)
+ #include <linux/vt.h>
+ #include <linux/kd.h>
++#endif
+ 
+ /* Eye Candy: Because white pixels are boring.. */
+ #include "Balloon.h"
+@@ -699,7 +701,9 @@ static void fb_initGraphics(_self)
+   showBalloonAt(self,x-(x/2),y-(y/2)) ;
+   showBalloonAt(self,x-(x/2),y+(y/2)) ;
+   /* let the user notice the balloons */
++#if !defined(__wasm32__)
+   aioSleepForUsecs( 1000000 ) ; 
++#endif
+ }
+ 
+ 
+diff --git a/platforms/unix/vm-display-fbdev/sqUnixFBDevKeyboard.c b/platforms/unix/vm-display-fbdev/sqUnixFBDevKeyboard.c
+index bb88eb5dc..b4bdf54e1 100644
+--- a/platforms/unix/vm-display-fbdev/sqUnixFBDevKeyboard.c
++++ b/platforms/unix/vm-display-fbdev/sqUnixFBDevKeyboard.c
+@@ -40,9 +40,11 @@
+ #include <termios.h>
+ #include <sys/ioctl.h>
+ 
++#if !defined(__wasm32__)
+ #include <linux/keyboard.h>
+ #include <linux/kd.h>
+ #include <linux/vt.h>
++#endif
+ 
+ 
+ #define _self	struct kb *self
+@@ -50,6 +52,51 @@
+ 
+ typedef void (*kb_callback_t)(int key, int up, int mod);
+ 
++#if defined(__wasm32__)
++
++struct kb
++{
++  char		 *kbName;
++  int		  fd;
++  kb_callback_t	  callback;
++};
++
++static void kb_noCallback(int k, int u, int s) {}
++
++static kb_callback_t kb_setCallback(_self, kb_callback_t callback)
++{
++  kb_callback_t old= self->callback;
++  self->callback= callback ? callback : kb_noCallback;
++  return old;
++}
++
++static void kb_bell(_self) {}
++static void kb_initGraphics(_self) {}
++static void kb_freeGraphics(_self) {}
++
++void kb_open(_self, int vtSwitch, int vtLock)
++{
++  self->kbName= "wasm-keyboard";
++  self->fd= -1;
++}
++
++void kb_close(_self) {}
++
++struct kb *kb_new(void)
++{
++  _self= (struct kb *)calloc(1, sizeof(struct kb));
++  self->fd= -1;
++  self->callback= kb_noCallback;
++  return self;
++}
++
++void kb_delete(_self)
++{
++  free(self);
++}
++
++#else
++
+ struct kb
+ {
+   char			 *kbName;
+@@ -354,5 +401,6 @@ void kb_delete(_self)
+   free(self);
+ }
+ 
++#endif
+ 
+ #undef _self
+diff --git a/platforms/unix/vm-display-fbdev/sqUnixFBDevMousePS2.c b/platforms/unix/vm-display-fbdev/sqUnixFBDevMousePS2.c
+index 2489baa36..4020d1bad 100644
+--- a/platforms/unix/vm-display-fbdev/sqUnixFBDevMousePS2.c
++++ b/platforms/unix/vm-display-fbdev/sqUnixFBDevMousePS2.c
+@@ -199,10 +199,13 @@ static int ms_ps2_reset(_self)
+ 
+ static void ms_ps2_init(_self)
+ {
++#if defined(__wasm32__)
++  return;
++#else
+   int id;
+   ms_ps2_disable(self);
+   id= ms_ps2_reset(self);
+   DPRINTF("%s: mouse id %02x\n", self->msName, id);
+   ms_ps2_enable(self);
++#endif
+ }
+-
+diff --git a/platforms/unix/vm/include_ucontext.h b/platforms/unix/vm/include_ucontext.h
+index 3fb578445..6ec6b470f 100644
+--- a/platforms/unix/vm/include_ucontext.h
++++ b/platforms/unix/vm/include_ucontext.h
+@@ -85,6 +85,10 @@
+ # define _PC_IN_UCONTEXT uc_mcontext.arm_pc
+ # define _FP_IN_UCONTEXT uc_mcontext.arm_fp
+ # define _SP_IN_UCONTEXT uc_mcontext.arm_sp
++#elif defined(__wasm32__)
++# define _PC_IN_UCONTEXT uc_flags
++# define _FP_IN_UCONTEXT uc_flags
++# define _SP_IN_UCONTEXT uc_flags
+ #elif __linux__ && __riscv64__
+ # define _PC_IN_UCONTEXT uc_mcontext.__gregs[0]
+ # define _FP_IN_UCONTEXT uc_mcontext.__gregs[8]
+diff --git a/platforms/unix/vm/sqUnixExternalPrims.c b/platforms/unix/vm/sqUnixExternalPrims.c
+index a2bf7956b..68b9e7247 100644
+--- a/platforms/unix/vm/sqUnixExternalPrims.c
++++ b/platforms/unix/vm/sqUnixExternalPrims.c
+@@ -48,6 +48,49 @@
+ # include "dlfcn-dyld.c"
+ #endif
+ 
++#if defined(__wasm32__)
++
++#include "SqModule.h"
++
++extern struct SqModule display_fbdev;
++extern struct SqModule sound_OSS;
++
++void *ioLoadModule(char *pluginName)
++{
++  if (!pluginName || !*pluginName)
++    return (void *)1;
++  return 0;
++}
++
++#if SPURVM
++void *
++ioFindExternalFunctionInMetadataInto(char *lookupName, void *moduleHandle,
++											sqInt *metadataPtr)
++#else
++void *
++ioFindExternalFunctionIn(char *lookupName, void *moduleHandle)
++#endif
++{
++  (void)moduleHandle;
++#if SPURVM
++  if (metadataPtr)
++    *metadataPtr= NullSpurMetadata;
++#endif
++  if (!strcmp(lookupName, "display_fbdev"))
++    return &display_fbdev;
++  if (!strcmp(lookupName, "sound_OSS"))
++    return &sound_OSS;
++  return 0;
++}
++
++sqInt ioFreeModule(void *moduleHandle)
++{
++  (void)moduleHandle;
++  return 1;
++}
++
++#else
++
+ #if defined(HAVE_LIBDL)	/* non-starter without this! */
+ 
+ #ifdef HAVE_DLFCN_H
+@@ -519,3 +562,5 @@ sqInt ioFreeModule(void *moduleHandle)
+ 
+ 
+ #endif /* !HAVE_LIBDL */
++
++#endif /* __wasm32__ */
+diff --git a/platforms/unix/vm/sqUnixHeartbeat.c b/platforms/unix/vm/sqUnixHeartbeat.c
+index 900dff458..6848ae99d 100644
+--- a/platforms/unix/vm/sqUnixHeartbeat.c
++++ b/platforms/unix/vm/sqUnixHeartbeat.c
+@@ -190,6 +190,8 @@ ioHighResClock(void)
+ 	 */
+ #elif defined(__riscv64__)
+   	__asm__ __volatile__ ("rdcycle a0" : "=r"(value));
++#elif defined(__wasm32__)
++	value = (sqLong)currentUTCMicroseconds();
+ #else
+ # error "no high res clock defined"
+ #endif
+@@ -197,10 +199,20 @@ ioHighResClock(void)
+ }
+ 
+ usqLong
+-ioUTCMicroseconds() { return get64(utcMicrosecondClock); }
++ioUTCMicroseconds() {
++#if defined(__wasm32__)
++	updateMicrosecondClock();
++#endif
++	return get64(utcMicrosecondClock);
++}
+ 
+ usqLong
+-ioLocalMicroseconds() { return get64(localMicrosecondClock); }
++ioLocalMicroseconds() {
++#if defined(__wasm32__)
++	updateMicrosecondClock();
++#endif
++	return get64(localMicrosecondClock);
++}
+ 
+ sqInt
+ ioLocalSecondsOffset() { return vmGMTOffset / MicrosecondsPerSecond; }
+@@ -219,7 +231,12 @@ ioLocalMicrosecondsNow() { return currentUTCMicroseconds() + vmGMTOffset; };
+ 
+ /* ioMSecs answers the millisecondClock as of the last tick. */
+ unsigned int
+-ioMSecs() { return millisecondClock; }
++ioMSecs() {
++#if defined(__wasm32__)
++	updateMicrosecondClock();
++#endif
++	return millisecondClock;
++}
+ 
+ /* ioMicroMSecs answers the millisecondClock right now */
+ unsigned int
+@@ -297,6 +314,14 @@ heartbeat()
+ 	errno = saved_errno;
+ }
+ 
++#if defined(__wasm32__)
++void
++ioWasmSynchronousHeartbeat(void)
++{
++	heartbeat();
++}
++#endif
++
+ typedef enum { dead, condemned, nascent, quiescent, active } machine_state;
+ 
+ #define UNDEFINED 0xBADF00D
+@@ -376,6 +401,10 @@ beatStateMachine(void *careLess)
+ void
+ ioInitHeartbeat()
+ {
++#if defined(__wasm32__)
++	beatState = active;
++	heartbeat();
++#else
+ 	int er;
+ 	struct timespec halfAMo;
+ 	pthread_t careLess;
+@@ -385,6 +414,10 @@ ioInitHeartbeat()
+ 	 * child, restarting the heartbeat in a forked child.
+ 	 */
+ 	if (stateMachinePolicy == UNDEFINED) {
++#if defined(__wasm32__)
++		stateMachinePolicy = SCHED_OTHER;
++		stateMachinePriority.sched_priority = 0;
++#else
+ 		if ((er = pthread_getschedparam(pthread_self(),
+ 										&stateMachinePolicy,
+ 										&stateMachinePriority))) {
+@@ -400,6 +433,7 @@ ioInitHeartbeat()
+ 		if (sched_get_priority_max(stateMachinePolicy) < stateMachinePriority.sched_priority)
+ 			stateMachinePolicy = SCHED_FIFO;
+ 		pthread_atfork(0, /*prepare*/ 0, /*parent*/ ioInitHeartbeat /*child*/);
++#endif
+ 	}
+ 	else /* subsequently (in the child) init beatState before creating thread */
+ 		beatState = nascent;
+@@ -416,6 +450,7 @@ ioInitHeartbeat()
+ 	}
+ 	while (beatState == nascent)
+ 		nanosleep(&halfAMo, 0);
++#endif
+ }
+ 
+ void
+diff --git a/platforms/unix/vm/sqUnixMain.c b/platforms/unix/vm/sqUnixMain.c
+index 4795563f5..2e4ff8cd1 100644
+--- a/platforms/unix/vm/sqUnixMain.c
++++ b/platforms/unix/vm/sqUnixMain.c
+@@ -596,6 +596,11 @@ ioRelinquishProcessorForMicroseconds(sqInt us)
+   extern void checkHeartStillBeats();
+ 
+   checkHeartStillBeats();
++# endif
++# if defined(__wasm32__)
++  extern void ioWasmSynchronousHeartbeat(void);
++
++  ioWasmSynchronousHeartbeat();
+ # endif
+   dpy->ioRelinquishProcessorForMicroseconds(us);
+   return 0;
+@@ -607,6 +612,11 @@ sqInt
+ ioRelinquishProcessorForMicroseconds(sqInt us)
+ {
+   int now;
++# if defined(__wasm32__)
++  extern void ioWasmSynchronousHeartbeat(void);
++
++  ioWasmSynchronousHeartbeat();
++# endif
+   dpy->ioRelinquishProcessorForMicroseconds(us);
+   now= ioLowResMSecs();
+   if (now - lastInterruptCheck > (1000/25))	/* avoid thrashing intr checks from 1ms loop in idle proc  */
+diff --git a/platforms/unix/vm/sqUnixSpurMemory.c b/platforms/unix/vm/sqUnixSpurMemory.c
+index 241ddbf98..e68cfcfc1 100644
+--- a/platforms/unix/vm/sqUnixSpurMemory.c
++++ b/platforms/unix/vm/sqUnixSpurMemory.c
+@@ -281,6 +281,13 @@ allocateJITMemory(usqInt *desiredSize)
+ 	pageSize = getpagesize();
+ 	pageMask = ~(pageSize - 1);
+ 
++#if defined(__wasm32__)
++	if (*desiredSize == 0) {
++		endOfJITZone = hint;
++		return 0;
++	}
++#endif
++
+ #if !defined(MAP_JIT)
+ # define MAP_JIT 0
+ #endif
+diff --git a/platforms/unix/vm/sqUnixVMProfile.c b/platforms/unix/vm/sqUnixVMProfile.c
+index 609c17212..fbde9060b 100644
+--- a/platforms/unix/vm/sqUnixVMProfile.c
++++ b/platforms/unix/vm/sqUnixVMProfile.c
+@@ -166,10 +166,15 @@ initProfileThread()
+ 	(void)sigaction(SIGPROF, &sigprof_handler_action, 0);
+ 
+ 	mainThread = pthread_self();
++#if defined(__wasm32__)
++	profThreadPolicy = SCHED_OTHER;
++	profThreadPriority.sched_priority = 0;
++#else
+ 	if ((er = pthread_getschedparam(pthread_self(),
+ 									&profThreadPolicy,
+ 									&profThreadPriority)))
+ 		bail_out(er,"pthread_getschedparam failed");
++#endif
+ 	/* add 2 to priority to be above poll heartbeat thread, which we
+ 	 * want to profile.
+ 	 */
+diff --git a/src/plugins/BitBltPlugin/BitBltPlugin.c b/src/plugins/BitBltPlugin/BitBltPlugin.c
+index 30bfd7726..4d2a24ea6 100644
+--- a/src/plugins/BitBltPlugin/BitBltPlugin.c
++++ b/src/plugins/BitBltPlugin/BitBltPlugin.c
+@@ -8373,6 +8373,21 @@ warpPickSourcePixelsxDeltahyDeltahxDeltavyDeltavdstShiftIncflags(sqInt nPixels,
+ 
+ #ifdef SQUEAK_BUILTIN_PLUGIN
+ 
++#if defined(__wasm32__)
++# define DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveCompareColors)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveCopyBits)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDisplayString)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDrawLoop)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitivePixelValueAt)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitivePixelValueAtPut)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveWarpBits)
++# undef DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "BitBltPlugin";
+ void* BitBltPlugin_exports[][3] = {
+ 	{(void*)_m, "copyBits", (void*)copyBits},
+@@ -8381,13 +8396,13 @@ void* BitBltPlugin_exports[][3] = {
+ 	{(void*)_m, "initialiseModule", (void*)initialiseModule},
+ 	{(void*)_m, "loadBitBltFrom", (void*)loadBitBltFrom},
+ 	{(void*)_m, "moduleUnloaded", (void*)moduleUnloaded},
+-	{(void*)_m, "primitiveCompareColors\000\001\000", (void*)primitiveCompareColors},
+-	{(void*)_m, "primitiveCopyBits\000\001\000", (void*)primitiveCopyBits},
+-	{(void*)_m, "primitiveDisplayString\000\001\000", (void*)primitiveDisplayString},
+-	{(void*)_m, "primitiveDrawLoop\000\002\000", (void*)primitiveDrawLoop},
+-	{(void*)_m, "primitivePixelValueAt\000\002\001", (void*)primitivePixelValueAt},
+-	{(void*)_m, "primitivePixelValueAtPut\000\002\001", (void*)primitivePixelValueAtPut},
+-	{(void*)_m, "primitiveWarpBits\000\001\000", (void*)primitiveWarpBits},
++	{(void*)_m, "primitiveCompareColors\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveCompareColors)},
++	{(void*)_m, "primitiveCopyBits\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveCopyBits)},
++	{(void*)_m, "primitiveDisplayString\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDisplayString)},
++	{(void*)_m, "primitiveDrawLoop\000\002\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDrawLoop)},
++	{(void*)_m, "primitivePixelValueAt\000\002\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitivePixelValueAt)},
++	{(void*)_m, "primitivePixelValueAtPut\000\002\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitivePixelValueAtPut)},
++	{(void*)_m, "primitiveWarpBits\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveWarpBits)},
+ 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
+ 	{NULL, NULL, NULL}
+ };
+diff --git a/src/plugins/FilePlugin/FilePlugin.c b/src/plugins/FilePlugin/FilePlugin.c
+index 1f81b742e..d30d31f6a 100644
+--- a/src/plugins/FilePlugin/FilePlugin.c
++++ b/src/plugins/FilePlugin/FilePlugin.c
+@@ -189,7 +189,7 @@ extern sqInt pinObject(sqInt anObject);
+ # define pinObject(anObject) 0
+ #endif
+ extern sqInt pop(sqInt nItems);
+-extern sqInt popthenPush(sqInt nItems, sqInt oop);
++extern void popthenPush(sqInt nItems, sqInt oop);
+ extern sqInt popRemappableOop(void);
+ extern sqInt positive32BitIntegerFor(unsigned int integerValue);
+ extern usqInt positive32BitValueOf(sqInt oop);
+@@ -204,7 +204,7 @@ extern sqInt primitiveFailForOSError(sqLong osErrorCode);
+ # define primitiveFailForOSError(osErrorCode) 0
+ #endif
+ extern sqInt primitiveFailureCode(void);
+-extern sqInt pushRemappableOop(sqInt oop);
++extern void pushRemappableOop(sqInt oop);
+ extern sqInt slotSizeOf(sqInt oop);
+ extern sqInt stackIntegerValue(sqInt offset);
+ extern sqInt stackValue(sqInt offset);
+@@ -1932,6 +1932,41 @@ shutdownModule(void)
+ 
+ #ifdef SQUEAK_BUILTIN_PLUGIN
+ 
++#if defined(__wasm32__)
++# define DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveConnectToFile)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveConnectToFileDescriptor)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectoryCreate)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectoryDelete)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectoryDelimitor)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectoryEntry)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectoryGetMacTypeAndCreator)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectoryLookup)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDirectorySetMacTypeAndCreator)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDisableFileAccess)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileAtEnd)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileClose)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileDelete)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileDescriptorType)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileFlush)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileGetPosition)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileOpen)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileOpenNew)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileRead)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileRename)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileSetPosition)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileStdioHandles)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileSync)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileTruncate)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFileWrite)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveHasFileAccess)
++# undef DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "FilePlugin";
+ void* FilePlugin_exports[][3] = {
+ 	{(void*)_m, "fileOpenNamesizewritesecure", (void*)fileOpenNamesizewritesecure},
+@@ -1939,33 +1974,33 @@ void* FilePlugin_exports[][3] = {
+ 	{(void*)_m, "getModuleName", (void*)getModuleName},
+ 	{(void*)_m, "initialiseModule", (void*)initialiseModule},
+ 	{(void*)_m, "moduleUnloaded", (void*)moduleUnloaded},
+-	{(void*)_m, "primitiveConnectToFile\000\001\000", (void*)primitiveConnectToFile},
+-	{(void*)_m, "primitiveConnectToFileDescriptor\000\000\000", (void*)primitiveConnectToFileDescriptor},
+-	{(void*)_m, "primitiveDirectoryCreate\000\001\000", (void*)primitiveDirectoryCreate},
+-	{(void*)_m, "primitiveDirectoryDelete\000\001\000", (void*)primitiveDirectoryDelete},
+-	{(void*)_m, "primitiveDirectoryDelimitor\000\377\000", (void*)primitiveDirectoryDelimitor},
+-	{(void*)_m, "primitiveDirectoryEntry\000\001\000", (void*)primitiveDirectoryEntry},
+-	{(void*)_m, "primitiveDirectoryGetMacTypeAndCreator\000\001\000", (void*)primitiveDirectoryGetMacTypeAndCreator},
+-	{(void*)_m, "primitiveDirectoryLookup\000\001\000", (void*)primitiveDirectoryLookup},
+-	{(void*)_m, "primitiveDirectorySetMacTypeAndCreator\000\001\000", (void*)primitiveDirectorySetMacTypeAndCreator},
+-	{(void*)_m, "primitiveDisableFileAccess\000\377\000", (void*)primitiveDisableFileAccess},
+-	{(void*)_m, "primitiveFileAtEnd\000\001\000", (void*)primitiveFileAtEnd},
+-	{(void*)_m, "primitiveFileClose\000\001\000", (void*)primitiveFileClose},
+-	{(void*)_m, "primitiveFileDelete\000\001\000", (void*)primitiveFileDelete},
+-	{(void*)_m, "primitiveFileDescriptorType\000\000\000", (void*)primitiveFileDescriptorType},
+-	{(void*)_m, "primitiveFileFlush\000\001\000", (void*)primitiveFileFlush},
+-	{(void*)_m, "primitiveFileGetPosition\000\001\000", (void*)primitiveFileGetPosition},
+-	{(void*)_m, "primitiveFileOpen\000\001\000", (void*)primitiveFileOpen},
+-	{(void*)_m, "primitiveFileOpenNew\000\001\000", (void*)primitiveFileOpenNew},
+-	{(void*)_m, "primitiveFileRead\000\377\000", (void*)primitiveFileRead},
+-	{(void*)_m, "primitiveFileRename\000\001\000", (void*)primitiveFileRename},
+-	{(void*)_m, "primitiveFileSetPosition\000\001\000", (void*)primitiveFileSetPosition},
+-	{(void*)_m, "primitiveFileSize\000\001\000", (void*)primitiveFileSize},
+-	{(void*)_m, "primitiveFileStdioHandles\000\377\000", (void*)primitiveFileStdioHandles},
+-	{(void*)_m, "primitiveFileSync\000\001\000", (void*)primitiveFileSync},
+-	{(void*)_m, "primitiveFileTruncate\000\001\000", (void*)primitiveFileTruncate},
+-	{(void*)_m, "primitiveFileWrite\000\001\000", (void*)primitiveFileWrite},
+-	{(void*)_m, "primitiveHasFileAccess\000\377\000", (void*)primitiveHasFileAccess},
++	{(void*)_m, "primitiveConnectToFile\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveConnectToFile)},
++	{(void*)_m, "primitiveConnectToFileDescriptor\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveConnectToFileDescriptor)},
++	{(void*)_m, "primitiveDirectoryCreate\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectoryCreate)},
++	{(void*)_m, "primitiveDirectoryDelete\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectoryDelete)},
++	{(void*)_m, "primitiveDirectoryDelimitor\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectoryDelimitor)},
++	{(void*)_m, "primitiveDirectoryEntry\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectoryEntry)},
++	{(void*)_m, "primitiveDirectoryGetMacTypeAndCreator\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectoryGetMacTypeAndCreator)},
++	{(void*)_m, "primitiveDirectoryLookup\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectoryLookup)},
++	{(void*)_m, "primitiveDirectorySetMacTypeAndCreator\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDirectorySetMacTypeAndCreator)},
++	{(void*)_m, "primitiveDisableFileAccess\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDisableFileAccess)},
++	{(void*)_m, "primitiveFileAtEnd\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileAtEnd)},
++	{(void*)_m, "primitiveFileClose\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileClose)},
++	{(void*)_m, "primitiveFileDelete\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileDelete)},
++	{(void*)_m, "primitiveFileDescriptorType\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileDescriptorType)},
++	{(void*)_m, "primitiveFileFlush\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileFlush)},
++	{(void*)_m, "primitiveFileGetPosition\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileGetPosition)},
++	{(void*)_m, "primitiveFileOpen\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileOpen)},
++	{(void*)_m, "primitiveFileOpenNew\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileOpenNew)},
++	{(void*)_m, "primitiveFileRead\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileRead)},
++	{(void*)_m, "primitiveFileRename\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileRename)},
++	{(void*)_m, "primitiveFileSetPosition\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileSetPosition)},
++	{(void*)_m, "primitiveFileSize\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileSize)},
++	{(void*)_m, "primitiveFileStdioHandles\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileStdioHandles)},
++	{(void*)_m, "primitiveFileSync\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileSync)},
++	{(void*)_m, "primitiveFileTruncate\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileTruncate)},
++	{(void*)_m, "primitiveFileWrite\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFileWrite)},
++	{(void*)_m, "primitiveHasFileAccess\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveHasFileAccess)},
+ 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
+ 	{(void*)_m, "setMacFileTypeAndCreator", (void*)setMacFileTypeAndCreator},
+ 	{(void*)_m, "shutdownModule", (void*)shutdownModule},
+diff --git a/src/plugins/LargeIntegers/LargeIntegers.c b/src/plugins/LargeIntegers/LargeIntegers.c
+index c3256dc0d..62acae8a1 100644
+--- a/src/plugins/LargeIntegers/LargeIntegers.c
++++ b/src/plugins/LargeIntegers/LargeIntegers.c
+@@ -185,7 +185,7 @@ extern sqInt popRemappableOop(void);
+ extern usqInt positive32BitValueOf(sqInt oop);
+ extern sqInt primitiveFail(void);
+ extern sqInt primitiveFailFor(sqInt reasonCode);
+-extern sqInt pushRemappableOop(sqInt oop);
++extern void pushRemappableOop(sqInt oop);
+ extern sqInt stObjectatput(sqInt array, sqInt index, sqInt value);
+ extern sqInt stackValue(sqInt offset);
+ extern sqInt trueObject(void);
+@@ -3738,24 +3738,47 @@ unsafeByteOfLargeIntat(sqInt bytesObj, sqInt ix)
+ 
+ #ifdef SQUEAK_BUILTIN_PLUGIN
+ 
++#if defined(__wasm32__)
++# define DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primAnyBitFromTo)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitAdd)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitBitAnd)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitBitOr)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitBitShiftMagnitude)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitBitXor)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitCompare)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitDivNegative)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitMultiplyNegative)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primDigitSubtract)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primGetModuleName)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primMontgomeryDigitLength)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primMontgomeryTimesModulo)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primNormalizeNegative)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primNormalizePositive)
++# undef DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "LargeIntegers";
+ void* LargeIntegers_exports[][3] = {
+ 	{(void*)_m, "getModuleName", (void*)getModuleName},
+-	{(void*)_m, "primAnyBitFromTo\000\001\001", (void*)primAnyBitFromTo},
+-	{(void*)_m, "primDigitAdd\000\001\001", (void*)primDigitAdd},
+-	{(void*)_m, "primDigitBitAnd\000\001\001", (void*)primDigitBitAnd},
+-	{(void*)_m, "primDigitBitOr\000\001\001", (void*)primDigitBitOr},
+-	{(void*)_m, "primDigitBitShiftMagnitude\000\001\001", (void*)primDigitBitShiftMagnitude},
+-	{(void*)_m, "primDigitBitXor\000\001\001", (void*)primDigitBitXor},
+-	{(void*)_m, "primDigitCompare\000\001\001", (void*)primDigitCompare},
+-	{(void*)_m, "primDigitDivNegative\000\001\001", (void*)primDigitDivNegative},
+-	{(void*)_m, "primDigitMultiplyNegative\000\001\001", (void*)primDigitMultiplyNegative},
+-	{(void*)_m, "primDigitSubtract\000\001\001", (void*)primDigitSubtract},
+-	{(void*)_m, "primGetModuleName\000\377\000", (void*)primGetModuleName},
+-	{(void*)_m, "primMontgomeryDigitLength\000\377\001", (void*)primMontgomeryDigitLength},
+-	{(void*)_m, "primMontgomeryTimesModulo\000\001\001", (void*)primMontgomeryTimesModulo},
+-	{(void*)_m, "primNormalizeNegative\000\001\001", (void*)primNormalizeNegative},
+-	{(void*)_m, "primNormalizePositive\000\001\001", (void*)primNormalizePositive},
++	{(void*)_m, "primAnyBitFromTo\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primAnyBitFromTo)},
++	{(void*)_m, "primDigitAdd\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitAdd)},
++	{(void*)_m, "primDigitBitAnd\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitBitAnd)},
++	{(void*)_m, "primDigitBitOr\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitBitOr)},
++	{(void*)_m, "primDigitBitShiftMagnitude\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitBitShiftMagnitude)},
++	{(void*)_m, "primDigitBitXor\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitBitXor)},
++	{(void*)_m, "primDigitCompare\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitCompare)},
++	{(void*)_m, "primDigitDivNegative\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitDivNegative)},
++	{(void*)_m, "primDigitMultiplyNegative\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitMultiplyNegative)},
++	{(void*)_m, "primDigitSubtract\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primDigitSubtract)},
++	{(void*)_m, "primGetModuleName\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primGetModuleName)},
++	{(void*)_m, "primMontgomeryDigitLength\000\377\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primMontgomeryDigitLength)},
++	{(void*)_m, "primMontgomeryTimesModulo\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primMontgomeryTimesModulo)},
++	{(void*)_m, "primNormalizeNegative\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primNormalizeNegative)},
++	{(void*)_m, "primNormalizePositive\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primNormalizePositive)},
+ 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
+ 	{NULL, NULL, NULL}
+ };
+diff --git a/src/plugins/MiscPrimitivePlugin/MiscPrimitivePlugin.c b/src/plugins/MiscPrimitivePlugin/MiscPrimitivePlugin.c
+index b00860b59..96001a2e2 100644
+--- a/src/plugins/MiscPrimitivePlugin/MiscPrimitivePlugin.c
++++ b/src/plugins/MiscPrimitivePlugin/MiscPrimitivePlugin.c
+@@ -819,18 +819,35 @@ setInterpreter(struct VirtualMachine *anInterpreter)
+ 
+ #ifdef SQUEAK_BUILTIN_PLUGIN
+ 
++#if defined(__wasm32__)
++# define DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveCompareString)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveCompressToByteArray)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveConvert8BitSigned)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDecompressFromByteArray)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFindFirstInString)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveFindSubstring)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveIndexOfAsciiInString)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveStringHash)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveTranslateStringWithTable)
++# undef DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "MiscPrimitivePlugin";
+ void* MiscPrimitivePlugin_exports[][3] = {
+ 	{(void*)_m, "getModuleName", (void*)getModuleName},
+-	{(void*)_m, "primitiveCompareString\000\001\001", (void*)primitiveCompareString},
+-	{(void*)_m, "primitiveCompressToByteArray\000\002\003", (void*)primitiveCompressToByteArray},
+-	{(void*)_m, "primitiveConvert8BitSigned\000\001\003", (void*)primitiveConvert8BitSigned},
+-	{(void*)_m, "primitiveDecompressFromByteArray\000\002\003", (void*)primitiveDecompressFromByteArray},
+-	{(void*)_m, "primitiveFindFirstInString\000\001\001", (void*)primitiveFindFirstInString},
+-	{(void*)_m, "primitiveFindSubstring\000\001\001", (void*)primitiveFindSubstring},
+-	{(void*)_m, "primitiveIndexOfAsciiInString\000\001\001", (void*)primitiveIndexOfAsciiInString},
+-	{(void*)_m, "primitiveStringHash\000\001\001", (void*)primitiveStringHash},
+-	{(void*)_m, "primitiveTranslateStringWithTable\000\001\001", (void*)primitiveTranslateStringWithTable},
++	{(void*)_m, "primitiveCompareString\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveCompareString)},
++	{(void*)_m, "primitiveCompressToByteArray\000\002\003", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveCompressToByteArray)},
++	{(void*)_m, "primitiveConvert8BitSigned\000\001\003", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveConvert8BitSigned)},
++	{(void*)_m, "primitiveDecompressFromByteArray\000\002\003", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDecompressFromByteArray)},
++	{(void*)_m, "primitiveFindFirstInString\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFindFirstInString)},
++	{(void*)_m, "primitiveFindSubstring\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveFindSubstring)},
++	{(void*)_m, "primitiveIndexOfAsciiInString\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveIndexOfAsciiInString)},
++	{(void*)_m, "primitiveStringHash\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveStringHash)},
++	{(void*)_m, "primitiveTranslateStringWithTable\000\001\001", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveTranslateStringWithTable)},
+ 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
+ 	{NULL, NULL, NULL}
+ };
+diff --git a/src/plugins/SocketPlugin/SocketPlugin.c b/src/plugins/SocketPlugin/SocketPlugin.c
+index 611792761..d04d62d00 100644
+--- a/src/plugins/SocketPlugin/SocketPlugin.c
++++ b/src/plugins/SocketPlugin/SocketPlugin.c
+@@ -174,7 +174,7 @@ extern sqInt pop(sqInt nItems);
+ extern sqInt popRemappableOop(void);
+ extern sqInt primitiveFail(void);
+ extern sqInt primitiveFailFor(sqInt reasonCode);
+-extern sqInt pushRemappableOop(sqInt oop);
++extern void pushRemappableOop(sqInt oop);
+ extern sqInt slotSizeOf(sqInt oop);
+ extern sqInt stackValue(sqInt offset);
+ extern sqInt storeIntegerofObjectwithValue(sqInt index, sqInt oop, sqInt integer);
+@@ -2272,73 +2272,143 @@ shutdownModule(void)
+ 
+ #ifdef SQUEAK_BUILTIN_PLUGIN
+ 
++#if defined(__wasm32__)
++# define DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDisableSocketAccess)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveHasSocketAccess)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveInitializeNetwork)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverAbortLookup)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverAddressLookupResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverError)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfo)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfoFamily)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfoNext)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfoProtocol)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfoResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfoSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetAddressInfoType)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetNameInfo)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetNameInfoHostResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetNameInfoHostSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetNameInfoServiceResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverGetNameInfoServiceSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverHostNameResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverHostNameSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverLocalAddress)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverNameLookupResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverStartAddressLookup)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverStartNameLookup)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveResolverStatus)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketAbortConnection)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketAccept)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketAccept3Semaphores)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketAddressGetPort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketAddressSetPort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketBindTo)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketBindToPort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketCloseConnection)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketConnectionStatus)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketConnectTo)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketConnectToPort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketCreate)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketCreate3Semaphores)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketCreateRAW)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketDestroy)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketError)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketGetOptions)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketListenOnPort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketListenOnPortBacklog)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketListenOnPortBacklogInterface)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketListenWithBacklog)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketListenWithOrWithoutBacklog)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketLocalAddress)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketLocalAddressResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketLocalAddressSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketLocalPort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketReceiveDataAvailable)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketReceiveDataBufCount)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketReceiveUDPDataBufCount)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketRemoteAddress)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketRemoteAddressResult)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketRemoteAddressSize)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketRemotePort)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketSendDataBufCount)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketSendDone)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketSendUDPDataBufCount)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSocketSetOptions)
++# undef DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "SocketPlugin";
+ void* SocketPlugin_exports[][3] = {
+ 	{(void*)_m, "getModuleName", (void*)getModuleName},
+ 	{(void*)_m, "initialiseModule", (void*)initialiseModule},
+ 	{(void*)_m, "moduleUnloaded", (void*)moduleUnloaded},
+-	{(void*)_m, "primitiveDisableSocketAccess\000\377\000", (void*)primitiveDisableSocketAccess},
+-	{(void*)_m, "primitiveHasSocketAccess\000\377\000", (void*)primitiveHasSocketAccess},
+-	{(void*)_m, "primitiveInitializeNetwork\000\000\000", (void*)primitiveInitializeNetwork},
+-	{(void*)_m, "primitiveResolverAbortLookup\000\377\000", (void*)primitiveResolverAbortLookup},
+-	{(void*)_m, "primitiveResolverAddressLookupResult\000\377\000", (void*)primitiveResolverAddressLookupResult},
+-	{(void*)_m, "primitiveResolverError\000\377\000", (void*)primitiveResolverError},
+-	{(void*)_m, "primitiveResolverGetAddressInfo\000\000\000", (void*)primitiveResolverGetAddressInfo},
+-	{(void*)_m, "primitiveResolverGetAddressInfoFamily\000\377\000", (void*)primitiveResolverGetAddressInfoFamily},
+-	{(void*)_m, "primitiveResolverGetAddressInfoNext\000\377\000", (void*)primitiveResolverGetAddressInfoNext},
+-	{(void*)_m, "primitiveResolverGetAddressInfoProtocol\000\377\000", (void*)primitiveResolverGetAddressInfoProtocol},
+-	{(void*)_m, "primitiveResolverGetAddressInfoResult\000\000\000", (void*)primitiveResolverGetAddressInfoResult},
+-	{(void*)_m, "primitiveResolverGetAddressInfoSize\000\377\000", (void*)primitiveResolverGetAddressInfoSize},
+-	{(void*)_m, "primitiveResolverGetAddressInfoType\000\377\000", (void*)primitiveResolverGetAddressInfoType},
+-	{(void*)_m, "primitiveResolverGetNameInfo\000\001\000", (void*)primitiveResolverGetNameInfo},
+-	{(void*)_m, "primitiveResolverGetNameInfoHostResult\000\000\000", (void*)primitiveResolverGetNameInfoHostResult},
+-	{(void*)_m, "primitiveResolverGetNameInfoHostSize\000\377\000", (void*)primitiveResolverGetNameInfoHostSize},
+-	{(void*)_m, "primitiveResolverGetNameInfoServiceResult\000\000\000", (void*)primitiveResolverGetNameInfoServiceResult},
+-	{(void*)_m, "primitiveResolverGetNameInfoServiceSize\000\377\000", (void*)primitiveResolverGetNameInfoServiceSize},
+-	{(void*)_m, "primitiveResolverHostNameResult\000\000\000", (void*)primitiveResolverHostNameResult},
+-	{(void*)_m, "primitiveResolverHostNameSize\000\377\000", (void*)primitiveResolverHostNameSize},
+-	{(void*)_m, "primitiveResolverLocalAddress\000\377\000", (void*)primitiveResolverLocalAddress},
+-	{(void*)_m, "primitiveResolverNameLookupResult\000\377\000", (void*)primitiveResolverNameLookupResult},
+-	{(void*)_m, "primitiveResolverStartAddressLookup\000\000\000", (void*)primitiveResolverStartAddressLookup},
+-	{(void*)_m, "primitiveResolverStartNameLookup\000\000\000", (void*)primitiveResolverStartNameLookup},
+-	{(void*)_m, "primitiveResolverStatus\000\377\000", (void*)primitiveResolverStatus},
+-	{(void*)_m, "primitiveSocketAbortConnection\000\001\000", (void*)primitiveSocketAbortConnection},
+-	{(void*)_m, "primitiveSocketAccept\000\001\000", (void*)primitiveSocketAccept},
+-	{(void*)_m, "primitiveSocketAccept3Semaphores\000\001\000", (void*)primitiveSocketAccept3Semaphores},
+-	{(void*)_m, "primitiveSocketAddressGetPort\000\001\000", (void*)primitiveSocketAddressGetPort},
+-	{(void*)_m, "primitiveSocketAddressSetPort\000\001\000", (void*)primitiveSocketAddressSetPort},
+-	{(void*)_m, "primitiveSocketBindTo\000\001\000", (void*)primitiveSocketBindTo},
+-	{(void*)_m, "primitiveSocketBindToPort\000\001\000", (void*)primitiveSocketBindToPort},
+-	{(void*)_m, "primitiveSocketCloseConnection\000\001\000", (void*)primitiveSocketCloseConnection},
+-	{(void*)_m, "primitiveSocketConnectionStatus\000\001\000", (void*)primitiveSocketConnectionStatus},
+-	{(void*)_m, "primitiveSocketConnectTo\000\001\000", (void*)primitiveSocketConnectTo},
+-	{(void*)_m, "primitiveSocketConnectToPort\000\001\000", (void*)primitiveSocketConnectToPort},
+-	{(void*)_m, "primitiveSocketCreate\000\000\000", (void*)primitiveSocketCreate},
+-	{(void*)_m, "primitiveSocketCreate3Semaphores\000\000\000", (void*)primitiveSocketCreate3Semaphores},
+-	{(void*)_m, "primitiveSocketCreateRAW\000\000\000", (void*)primitiveSocketCreateRAW},
+-	{(void*)_m, "primitiveSocketDestroy\000\001\000", (void*)primitiveSocketDestroy},
+-	{(void*)_m, "primitiveSocketError\000\001\000", (void*)primitiveSocketError},
+-	{(void*)_m, "primitiveSocketGetOptions\000\001\000", (void*)primitiveSocketGetOptions},
+-	{(void*)_m, "primitiveSocketListenOnPort\000\001\000", (void*)primitiveSocketListenOnPort},
+-	{(void*)_m, "primitiveSocketListenOnPortBacklog\000\001\000", (void*)primitiveSocketListenOnPortBacklog},
+-	{(void*)_m, "primitiveSocketListenOnPortBacklogInterface\000\001\000", (void*)primitiveSocketListenOnPortBacklogInterface},
+-	{(void*)_m, "primitiveSocketListenWithBacklog\000\001\000", (void*)primitiveSocketListenWithBacklog},
+-	{(void*)_m, "primitiveSocketListenWithOrWithoutBacklog\000\001\000", (void*)primitiveSocketListenWithOrWithoutBacklog},
+-	{(void*)_m, "primitiveSocketLocalAddress\000\001\000", (void*)primitiveSocketLocalAddress},
+-	{(void*)_m, "primitiveSocketLocalAddressResult\000\001\000", (void*)primitiveSocketLocalAddressResult},
+-	{(void*)_m, "primitiveSocketLocalAddressSize\000\001\000", (void*)primitiveSocketLocalAddressSize},
+-	{(void*)_m, "primitiveSocketLocalPort\000\001\000", (void*)primitiveSocketLocalPort},
+-	{(void*)_m, "primitiveSocketReceiveDataAvailable\000\001\000", (void*)primitiveSocketReceiveDataAvailable},
+-	{(void*)_m, "primitiveSocketReceiveDataBufCount\000\001\000", (void*)primitiveSocketReceiveDataBufCount},
+-	{(void*)_m, "primitiveSocketReceiveUDPDataBufCount\000\001\000", (void*)primitiveSocketReceiveUDPDataBufCount},
+-	{(void*)_m, "primitiveSocketRemoteAddress\000\001\000", (void*)primitiveSocketRemoteAddress},
+-	{(void*)_m, "primitiveSocketRemoteAddressResult\000\001\000", (void*)primitiveSocketRemoteAddressResult},
+-	{(void*)_m, "primitiveSocketRemoteAddressSize\000\001\000", (void*)primitiveSocketRemoteAddressSize},
+-	{(void*)_m, "primitiveSocketRemotePort\000\001\000", (void*)primitiveSocketRemotePort},
+-	{(void*)_m, "primitiveSocketSendDataBufCount\000\001\000", (void*)primitiveSocketSendDataBufCount},
+-	{(void*)_m, "primitiveSocketSendDone\000\001\000", (void*)primitiveSocketSendDone},
+-	{(void*)_m, "primitiveSocketSendUDPDataBufCount\000\001\000", (void*)primitiveSocketSendUDPDataBufCount},
+-	{(void*)_m, "primitiveSocketSetOptions\000\001\000", (void*)primitiveSocketSetOptions},
++	{(void*)_m, "primitiveDisableSocketAccess\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDisableSocketAccess)},
++	{(void*)_m, "primitiveHasSocketAccess\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveHasSocketAccess)},
++	{(void*)_m, "primitiveInitializeNetwork\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveInitializeNetwork)},
++	{(void*)_m, "primitiveResolverAbortLookup\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverAbortLookup)},
++	{(void*)_m, "primitiveResolverAddressLookupResult\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverAddressLookupResult)},
++	{(void*)_m, "primitiveResolverError\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverError)},
++	{(void*)_m, "primitiveResolverGetAddressInfo\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfo)},
++	{(void*)_m, "primitiveResolverGetAddressInfoFamily\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfoFamily)},
++	{(void*)_m, "primitiveResolverGetAddressInfoNext\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfoNext)},
++	{(void*)_m, "primitiveResolverGetAddressInfoProtocol\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfoProtocol)},
++	{(void*)_m, "primitiveResolverGetAddressInfoResult\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfoResult)},
++	{(void*)_m, "primitiveResolverGetAddressInfoSize\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfoSize)},
++	{(void*)_m, "primitiveResolverGetAddressInfoType\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetAddressInfoType)},
++	{(void*)_m, "primitiveResolverGetNameInfo\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetNameInfo)},
++	{(void*)_m, "primitiveResolverGetNameInfoHostResult\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetNameInfoHostResult)},
++	{(void*)_m, "primitiveResolverGetNameInfoHostSize\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetNameInfoHostSize)},
++	{(void*)_m, "primitiveResolverGetNameInfoServiceResult\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetNameInfoServiceResult)},
++	{(void*)_m, "primitiveResolverGetNameInfoServiceSize\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverGetNameInfoServiceSize)},
++	{(void*)_m, "primitiveResolverHostNameResult\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverHostNameResult)},
++	{(void*)_m, "primitiveResolverHostNameSize\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverHostNameSize)},
++	{(void*)_m, "primitiveResolverLocalAddress\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverLocalAddress)},
++	{(void*)_m, "primitiveResolverNameLookupResult\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverNameLookupResult)},
++	{(void*)_m, "primitiveResolverStartAddressLookup\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverStartAddressLookup)},
++	{(void*)_m, "primitiveResolverStartNameLookup\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverStartNameLookup)},
++	{(void*)_m, "primitiveResolverStatus\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveResolverStatus)},
++	{(void*)_m, "primitiveSocketAbortConnection\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketAbortConnection)},
++	{(void*)_m, "primitiveSocketAccept\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketAccept)},
++	{(void*)_m, "primitiveSocketAccept3Semaphores\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketAccept3Semaphores)},
++	{(void*)_m, "primitiveSocketAddressGetPort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketAddressGetPort)},
++	{(void*)_m, "primitiveSocketAddressSetPort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketAddressSetPort)},
++	{(void*)_m, "primitiveSocketBindTo\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketBindTo)},
++	{(void*)_m, "primitiveSocketBindToPort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketBindToPort)},
++	{(void*)_m, "primitiveSocketCloseConnection\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketCloseConnection)},
++	{(void*)_m, "primitiveSocketConnectionStatus\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketConnectionStatus)},
++	{(void*)_m, "primitiveSocketConnectTo\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketConnectTo)},
++	{(void*)_m, "primitiveSocketConnectToPort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketConnectToPort)},
++	{(void*)_m, "primitiveSocketCreate\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketCreate)},
++	{(void*)_m, "primitiveSocketCreate3Semaphores\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketCreate3Semaphores)},
++	{(void*)_m, "primitiveSocketCreateRAW\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketCreateRAW)},
++	{(void*)_m, "primitiveSocketDestroy\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketDestroy)},
++	{(void*)_m, "primitiveSocketError\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketError)},
++	{(void*)_m, "primitiveSocketGetOptions\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketGetOptions)},
++	{(void*)_m, "primitiveSocketListenOnPort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketListenOnPort)},
++	{(void*)_m, "primitiveSocketListenOnPortBacklog\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketListenOnPortBacklog)},
++	{(void*)_m, "primitiveSocketListenOnPortBacklogInterface\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketListenOnPortBacklogInterface)},
++	{(void*)_m, "primitiveSocketListenWithBacklog\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketListenWithBacklog)},
++	{(void*)_m, "primitiveSocketListenWithOrWithoutBacklog\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketListenWithOrWithoutBacklog)},
++	{(void*)_m, "primitiveSocketLocalAddress\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketLocalAddress)},
++	{(void*)_m, "primitiveSocketLocalAddressResult\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketLocalAddressResult)},
++	{(void*)_m, "primitiveSocketLocalAddressSize\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketLocalAddressSize)},
++	{(void*)_m, "primitiveSocketLocalPort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketLocalPort)},
++	{(void*)_m, "primitiveSocketReceiveDataAvailable\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketReceiveDataAvailable)},
++	{(void*)_m, "primitiveSocketReceiveDataBufCount\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketReceiveDataBufCount)},
++	{(void*)_m, "primitiveSocketReceiveUDPDataBufCount\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketReceiveUDPDataBufCount)},
++	{(void*)_m, "primitiveSocketRemoteAddress\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketRemoteAddress)},
++	{(void*)_m, "primitiveSocketRemoteAddressResult\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketRemoteAddressResult)},
++	{(void*)_m, "primitiveSocketRemoteAddressSize\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketRemoteAddressSize)},
++	{(void*)_m, "primitiveSocketRemotePort\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketRemotePort)},
++	{(void*)_m, "primitiveSocketSendDataBufCount\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketSendDataBufCount)},
++	{(void*)_m, "primitiveSocketSendDone\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketSendDone)},
++	{(void*)_m, "primitiveSocketSendUDPDataBufCount\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketSendUDPDataBufCount)},
++	{(void*)_m, "primitiveSocketSetOptions\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSocketSetOptions)},
+ 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
+ 	{(void*)_m, "shutdownModule", (void*)shutdownModule},
+ 	{NULL, NULL, NULL}
+diff --git a/src/plugins/SqueakSSL/SqueakSSL.c b/src/plugins/SqueakSSL/SqueakSSL.c
+index e35b8f305..0ff0b4774 100644
+--- a/src/plugins/SqueakSSL/SqueakSSL.c
++++ b/src/plugins/SqueakSSL/SqueakSSL.c
+@@ -78,7 +78,11 @@ extern sqInt isBytes(sqInt oop);
+ extern sqInt methodArgumentCount(void);
+ extern sqInt nilObject(void);
+ extern sqInt pop(sqInt nItems);
++#if defined(__wasm32__)
++extern void popthenPush(sqInt nItems, sqInt oop);
++#else
+ extern sqInt popthenPush(sqInt nItems, sqInt oop);
++#endif
+ extern sqInt primitiveFail(void);
+ extern sqInt pushInteger(sqInt integerValue);
+ extern sqInt signed32BitIntegerFor(sqInt integerValue);
+@@ -551,19 +555,37 @@ setInterpreter(struct VirtualMachine *anInterpreter)
+ 
+ #ifdef SQUEAK_BUILTIN_PLUGIN
+ 
++#if defined(__wasm32__)
++# define DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveAccept)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveConnect)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveCreate)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDecrypt)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveDestroy)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveEncrypt)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveGetIntProperty)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveGetStringProperty)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSetIntProperty)
++DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER(primitiveSetStringProperty)
++# undef DEFINE_PLUGIN_PRIMITIVE_VOID_WRAPPER
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define PLUGIN_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "SqueakSSL";
+ void* SqueakSSL_exports[][3] = {
+ 	{(void*)_m, "getModuleName", (void*)getModuleName},
+-	{(void*)_m, "primitiveAccept\000\001\000", (void*)primitiveAccept},
+-	{(void*)_m, "primitiveConnect\000\001\000", (void*)primitiveConnect},
+-	{(void*)_m, "primitiveCreate\000\377\000", (void*)primitiveCreate},
+-	{(void*)_m, "primitiveDecrypt\000\001\000", (void*)primitiveDecrypt},
+-	{(void*)_m, "primitiveDestroy\000\000\000", (void*)primitiveDestroy},
+-	{(void*)_m, "primitiveEncrypt\000\001\000", (void*)primitiveEncrypt},
+-	{(void*)_m, "primitiveGetIntProperty\000\000\000", (void*)primitiveGetIntProperty},
+-	{(void*)_m, "primitiveGetStringProperty\000\000\000", (void*)primitiveGetStringProperty},
+-	{(void*)_m, "primitiveSetIntProperty\000\000\000", (void*)primitiveSetIntProperty},
+-	{(void*)_m, "primitiveSetStringProperty\000\001\000", (void*)primitiveSetStringProperty},
++	{(void*)_m, "primitiveAccept\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveAccept)},
++	{(void*)_m, "primitiveConnect\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveConnect)},
++	{(void*)_m, "primitiveCreate\000\377\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveCreate)},
++	{(void*)_m, "primitiveDecrypt\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDecrypt)},
++	{(void*)_m, "primitiveDestroy\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveDestroy)},
++	{(void*)_m, "primitiveEncrypt\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveEncrypt)},
++	{(void*)_m, "primitiveGetIntProperty\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveGetIntProperty)},
++	{(void*)_m, "primitiveGetStringProperty\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveGetStringProperty)},
++	{(void*)_m, "primitiveSetIntProperty\000\000\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSetIntProperty)},
++	{(void*)_m, "primitiveSetStringProperty\000\001\000", PLUGIN_PRIMITIVE_EXPORT_ADDRESS(primitiveSetStringProperty)},
+ 	{(void*)_m, "setInterpreter", (void*)setInterpreter},
+ 	{NULL, NULL, NULL}
+ };
+diff --git a/src/spur32.sista/cointerp.c b/src/spur32.sista/cointerp.c
+index cdec35d33..9a72b8578 100644
+--- a/src/spur32.sista/cointerp.c
++++ b/src/spur32.sista/cointerp.c
+@@ -34,6 +34,8 @@ char *__interpBuildInfo = __buildInfo;
+ #include "cointerp.h"
+ #include "cogit.h"
+ 
++static void *wasmPersistentStackMemory = 0;
++
+ 
+ /* StackInterpreter class>>preambleCCode */
+ /* Disable Intel compiler inlining of warning which is used for breakpoints */
+@@ -1311,7 +1313,7 @@ static void NoDbgRegParms printStringDataOfon(sqInt oop, FILE *aStream);
+ extern void printUnmarkedOops(void);
+ #endif /* LLDB */
+ static sqInt NoDbgRegParms pushOnUnscannedEphemeronsStack(sqInt anEphemeron);
+-extern void pushRemappableOop(sqInt oop);
++extern sqInt pushRemappableOop(sqInt oop);
+ static void NoDbgRegParms queueMourner(sqInt anEphemeronOrWeakArray);
+ static sqInt NoDbgRegParms rawClassTagForClass(sqInt classObj);
+ extern sqInt rawHashBitsOf(sqInt objOop);
+@@ -1594,7 +1596,7 @@ static sqInt NoDbgRegParms pcPreviousToinSqueakV3PlusClosuresMethod(sqInt theIP,
+ extern sqInt pcPreviousToinSqueakV3PlusClosuresOrSistaV1Method(sqInt theIP, sqInt aMethod);
+ extern sqInt popStack(void);
+ extern sqInt pop(sqInt nItems);
+-extern void popthenPush(sqInt nItems, sqInt oop);
++extern sqInt popthenPush(sqInt nItems, sqInt oop);
+ static sqInt NoDbgRegParms positiveMachineIntegerFor(usqIntptr_t value);
+ static sqInt postGCUpdateDisplayBits(void);
+ EXPORT(void) primitiveEventProcessingControl(void);
+@@ -1646,7 +1648,7 @@ static void NoDbgRegParms printStackPageuseCount(StackPage *page, sqInt n);
+ extern void printStackReferencesTo(sqInt oop);
+ static void NoDbgRegParms printStringOf(sqInt oop);
+ extern void print(char *s);
+-extern void pushBool(sqInt trueOrFalse);
++extern sqInt pushBool(sqInt trueOrFalse);
+ static sqInt NoDbgRegParms pushedReceiverOrClosureOfFrame(char *theFP);
+ extern void pushFloat(double f);
+ extern sqInt pushInteger(sqInt integerValue);
+@@ -2855,7 +2857,16 @@ interpret(void)
+ 		stackPageBytes = stackPageByteSize();
+ 		/* begin computeStackZoneSize */
+ 		stackPagesBytes = (GIV(numStackPages) * ((sizeof(CogStackPage)) + (stackPageByteSize()))) + BytesPerWord;
++	#if defined(__wasm32__)
++		theStackMemory = wasmPersistentStackMemory;
++		if (!theStackMemory) {
++			theStackMemory = malloc(stackPagesBytes);
++			if (!theStackMemory) error("could not allocate stack pages");
++			wasmPersistentStackMemory = theStackMemory;
++		}
++	#else
+ 		theStackMemory = alloca(stackPagesBytes);
++	#endif
+ 		memset(theStackMemory, 0, stackPagesBytes);
+ 		initializeStacknumSlotspageSize(theStackMemory, stackPagesBytes / BytesPerWord, stackPageBytes / BytesPerWord);
+ 		assert((minimumUnusedHeadroom()) == stackPageBytes);
+@@ -6008,6 +6019,10 @@ GIV(bytecodeSetSelector) = (headerIndicatesAlternateBytecodeSet(methodHeaderOf(G
+ 				VM_LABEL(normalSend);
+ 				/* begin internalStackValue: */
+ 				rcvr = longAtPointer(localSP + (GIV(argumentCount) * BytesPerOop));
++				if (rcvr == null) {
++					rcvr = GIV(nilObj);
++					longAtPointerput(localSP + (GIV(argumentCount) * BytesPerOop), rcvr);
++				}
+ 				/* begin fetchClassTagOf: */
+ 				lkupClassTag = (((tagBits = rcvr & (tagMask()))) != 0
+ 					? ((tagBits & 1) != 0
+@@ -19249,8 +19264,16 @@ ensureContextIsExecutionSafeAfterAssignToStackPointer(sqInt aContext)
+ static sqInt
+ enterSmalltalkExecutiveImplementation(void)
+ {   DECL_MAYBE_SQ_GLOBAL_STRUCT
++#if defined(__wasm32__)
++	volatile char wasmStackMarker;
++#endif
+ 	assertCStackWellAligned();
++#if defined(__wasm32__)
++	GIV(CStackPointer) = ((usqIntptr_t)&wasmStackMarker);
++	GIV(CFramePointer) = ((usqIntptr_t)&wasmStackMarker);
++#else
+ 	ceCaptureCStackPointers();
++#endif
+ 	if ((((usqInt)(longAt(GIV(framePointer) + FoxMethod)))) < (startOfMemory())) {
+ 		returnToExecutivepostContextSwitch(0, 1);
+ 	}
+@@ -59997,7 +60020,7 @@ pushOnUnscannedEphemeronsStack(sqInt anEphemeron)
+ 	Spur doesn't GC during allocation. */
+ 
+ 	/* SpurMemoryManager>>#pushRemappableOop: */
+-void
++sqInt
+ pushRemappableOop(sqInt oop)
+ {   DECL_MAYBE_SQ_GLOBAL_STRUCT
+ 	assert(addressCouldBeOop(oop));
+@@ -60005,6 +60028,7 @@ pushRemappableOop(sqInt oop)
+ 	if (!(GIV(remapBufferCount) <= RemapBufferSize)) {
+ 		error("remapBuffer overflow");
+ 	}
++	return 0;
+ }
+ 
+ 
+@@ -71677,13 +71701,14 @@ pop(sqInt nItems)
+ /*	In the StackInterpreter stacks grow down. */
+ 
+ 	/* StackInterpreter>>#pop:thenPush: */
+-void
++sqInt
+ popthenPush(sqInt nItems, sqInt oop)
+ {   DECL_MAYBE_SQ_GLOBAL_STRUCT
+     char *sp;
+ 
+ 	longAtput((sp = GIV(stackPointer) + ((nItems - 1) * BytesPerWord)), oop);
+ 	GIV(stackPointer) = sp;
++	return 0;
+ }
+ 
+ 	/* StackInterpreter>>#positiveMachineIntegerFor: */
+@@ -74328,7 +74353,7 @@ print(char *s)
+ }
+ 
+ 	/* StackInterpreter>>#pushBool: */
+-void
++sqInt
+ pushBool(sqInt trueOrFalse)
+ {   DECL_MAYBE_SQ_GLOBAL_STRUCT
+     sqInt object;
+@@ -74340,6 +74365,7 @@ pushBool(sqInt trueOrFalse)
+ 		: GIV(falseObj));
+ 	longAtput((sp = GIV(stackPointer) - BytesPerWord), object);
+ 	GIV(stackPointer) = sp;
++	return 0;
+ }
+ 
+ 
+diff --git a/src/spur32.sista/cointerp.h b/src/spur32.sista/cointerp.h
+index bc47944b8..f31b13321 100644
+--- a/src/spur32.sista/cointerp.h
++++ b/src/spur32.sista/cointerp.h
+@@ -201,7 +201,7 @@ extern sqInt objectAfter(sqInt objOop);
+ extern sqInt popRemappableOop(void);
+ extern sqInt primitiveErrorTable(void);
+ extern void printObjStackAndContents(sqInt objStack);
+-extern void pushRemappableOop(sqInt oop);
++extern sqInt pushRemappableOop(sqInt oop);
+ extern sqInt rawHashBitsOf(sqInt objOop);
+ extern sqInt receiverTagBitsForMethod(sqInt aMethodObj);
+ extern sqInt shortentoIndexableSize(sqInt objOop, sqInt indexableSize);
+@@ -530,4 +530,3 @@ extern sqInt suppressHeartbeatFlag;
+ #define XIndex 0
+ #define YIndex 1
+ #define YoungSelectorInPIC -5
+-
+diff --git a/src/spur32.stack/interp.c b/src/spur32.stack/interp.c
+index fbc18edf6..fc6ec668b 100644
+--- a/src/spur32.stack/interp.c
++++ b/src/spur32.stack/interp.c
+@@ -168,6 +168,17 @@ warningat(const char *s, int l) { /* ditto with line number. */
+ #define MaxExternalPrimitiveTableSize 4096
+ #define MaxPrimitiveIndex 582
+ #define MaxQuickPrimitiveIndex 519
++#if defined(__wasm32__)
++# define QuickPrimitiveFunctionPointerTag 0x100000
++# define encodeQuickPrimitiveFunctionPointer(index) ((void (*)(void))((usqIntptr_t)(QuickPrimitiveFunctionPointerTag + (index))))
++# define decodeQuickPrimitiveFunctionPointer(pointer) ((sqInt)(((usqIntptr_t)(pointer)) - QuickPrimitiveFunctionPointerTag))
++# define isEncodedQuickPrimitiveFunctionPointer(pointer) ((((usqIntptr_t)(pointer)) >= QuickPrimitiveFunctionPointerTag) && (((usqIntptr_t)(pointer)) <= (QuickPrimitiveFunctionPointerTag + MaxQuickPrimitiveIndex)))
++#else
++# define encodeQuickPrimitiveFunctionPointer(index) ((void (*)(void))((usqIntptr_t)(index)))
++# define decodeQuickPrimitiveFunctionPointer(pointer) ((sqInt)(pointer))
++# define isEncodedQuickPrimitiveFunctionPointer(pointer) (((usqIntptr_t)(pointer)) <= MaxQuickPrimitiveIndex)
++#endif
++#define primitiveFunctionPointerForIndex(index) ((index) > MaxPrimitiveIndex ? 0 : ((((index) >= 0x100) && ((index) <= MaxQuickPrimitiveIndex)) ? encodeQuickPrimitiveFunctionPointer(index) : primitiveTable[index]))
+ #define MaxRTRefCount 7
+ #define MessageArgumentsIndex 1
+ #define MessageLookupClassIndex 2
+@@ -684,7 +695,7 @@ extern sqInt byteSizeOf(sqInt oop);
+ extern usqInt bytesPerElement(sqInt oop);
+ static sqInt NoDbgRegParms changeClassOfto(sqInt rcvr, sqInt argClass);
+ extern sqInt characterObjectOf(sqInt characterCode);
+-extern void characterTable(void);
++extern sqInt characterTable(void);
+ extern usqInt characterValueOf(sqInt oop);
+ extern sqInt checkedLongAt(sqInt byteAddress);
+ static sqInt checkHeapFreeSpaceIntegrity(void);
+@@ -1200,7 +1211,7 @@ static sqInt NoDbgRegParms imageFormatVersionFromSnapshot(sqInt imageVersion);
+ extern sqInt includesBehaviorThatOf(sqInt aClass, sqInt aSuperclass);
+ static sqInt NoDbgRegParms instructionPointerForFramecurrentFPcurrentIP(char *spouseFP, char *currentFP, sqInt instrPtr);
+ static sqInt NeverInline interpreterAllocationReserveBytes(void);
+-extern void ioFilenamefromStringofLengthresolveAliases(char *aCharBuffer, char *aFilenameString, sqInt filenameLength, sqInt aBoolean);
++extern sqInt ioFilenamefromStringofLengthresolveAliases(char *aCharBuffer, char *aFilenameString, sqInt filenameLength, sqInt aBoolean);
+ static sqInt NoDbgRegParms isBaseFrame(char *theFP);
+ extern sqInt isBooleanObject(sqInt oop);
+ static sqInt NoDbgRegParms isCalloutPrimitiveIndex(sqInt primIndex);
+@@ -5672,10 +5683,10 @@ GIV(bytecodeSetSelector) = (methodUsesAlternateBytecodeSet(GIV(method))
+ 	l848:	/* end internalFindNewMethodOrdinary */;
+ 					/* begin internalExecuteNewMethod */
+ 					if (primitiveFunctionPointer != 0) {
+-						if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++						if (isPrimitiveFunctionPointerAnIndex()) {
+ 							/* begin internalQuickPrimitiveResponse */
+ 							assert(isPrimitiveFunctionPointerAnIndex());
+-							localPrimIndex = ((sqInt) primitiveFunctionPointer);
++							localPrimIndex = decodeQuickPrimitiveFunctionPointer(primitiveFunctionPointer);
+ 							assert((localPrimIndex > 0xFF)
+ 							 && (localPrimIndex < 520));
+ 							if (localPrimIndex >= 264) {
+@@ -20848,7 +20859,7 @@ primitiveInvokeObjectAsMethod(void)
+ 	findNewMethodInClassTag(lookupClassTag);
+ 	/* begin executeNewMethod */
+ 	if (primitiveFunctionPointer != 0) {
+-		if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++		if (isPrimitiveFunctionPointerAnIndex()) {
+ 			externalQuickPrimitiveResponse();
+ 			goto l13;
+ 		}
+@@ -22886,7 +22897,7 @@ primitivePerformInSuperclass(void)
+ 	GIV(stackPointer) += (performArgCount + 2) * BytesPerWord;
+ 	/* begin executeNewMethod */
+ 	if (primitiveFunctionPointer != 0) {
+-		if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++		if (isPrimitiveFunctionPointerAnIndex()) {
+ 			externalQuickPrimitiveResponse();
+ 			goto l14;
+ 		}
+@@ -23096,7 +23107,7 @@ primitivePerformWithArgs(void)
+ 	GIV(stackPointer) += (performArgCount + 2) * BytesPerWord;
+ 	/* begin executeNewMethod */
+ 	if (primitiveFunctionPointer != 0) {
+-		if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++		if (isPrimitiveFunctionPointerAnIndex()) {
+ 			externalQuickPrimitiveResponse();
+ 			goto l14;
+ 		}
+@@ -32688,10 +32699,11 @@ characterObjectOf(sqInt characterCode)
+ }
+ 
+ 	/* SpurMemoryManager>>#characterTable */
+-void
++sqInt
+ characterTable(void)
+ {
+ 	error("shouldNotImplement");
++	return 0;
+ }
+ 
+ 
+@@ -49496,9 +49508,7 @@ addNewMethodToCache(sqInt classObj)
+ 			primitiveIndex = 0;
+ 		}
+ 		/* begin functionPointerFor:inClass: */
+-		primitiveFunctionPointer = ((void (*)(void)) ((primitiveIndex > MaxPrimitiveIndex
+-	? 0
+-	: primitiveTable[primitiveIndex])));
++		primitiveFunctionPointer = primitiveFunctionPointerForIndex(primitiveIndex);
+ 	}
+ 	else {
+ 		assert(!((isNonImmediate(GIV(newMethod)))
+@@ -51839,7 +51849,7 @@ externalQuickPrimitiveResponse(void)
+     char *sp4;
+ 
+ 	assert(isPrimitiveFunctionPointerAnIndex());
+-	localPrimIndex = ((sqInt) primitiveFunctionPointer);
++	localPrimIndex = decodeQuickPrimitiveFunctionPointer(primitiveFunctionPointer);
+ 	assert((localPrimIndex > 0xFF)
+ 	 && (localPrimIndex < 520));
+ 	if (localPrimIndex >= 264) {
+@@ -53797,10 +53807,11 @@ interpreterAllocationReserveBytes(void)
+  */
+ 
+ 	/* StackInterpreter>>#ioFilename:fromString:ofLength:resolveAliases: */
+-void
++sqInt
+ ioFilenamefromStringofLengthresolveAliases(char *aCharBuffer, char *aFilenameString, sqInt filenameLength, sqInt aBoolean)
+ {
+ 	sqGetFilenameFromString(aCharBuffer, aFilenameString, filenameLength, aBoolean);
++	return 0;
+ }
+ 
+ 
+@@ -53994,7 +54005,7 @@ isMetaPrimitiveIndex(sqInt primIndex)
+ static sqInt
+ isPrimitiveFunctionPointerAnIndex(void)
+ {
+-	return (((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex;
++	return isEncodedQuickPrimitiveFunctionPointer(primitiveFunctionPointer);
+ }
+ 
+ 	/* StackInterpreter>>#isQuickPrimitiveIndex: */
+@@ -61271,12 +61282,10 @@ saneFunctionPointerForFailureOfPrimIndex(sqInt primIndex)
+     void (*basePrimitive)(void);
+ 
+ 	/* begin functionPointerFor:inClass: */
+-	basePrimitive = ((void (*)(void)) ((primIndex > MaxPrimitiveIndex
+-	? 0
+-	: primitiveTable[primIndex])));
++	basePrimitive = primitiveFunctionPointerForIndex(primIndex);
+ 	return (primitiveFunctionPointer == basePrimitive)
+ 	 || (((isCalloutPrimitiveIndex(primIndex))
+-	 && (!((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex)))
++	 && (!(isPrimitiveFunctionPointerAnIndex())))
+ 	 || ((isMetaPrimitiveIndex(primIndex))
+ 	 && (GIV(metaAccessorDepth) > -2)));
+ }
+@@ -66047,9 +66056,7 @@ primitiveDoPrimitiveWithArgs(void)
+ 	}
+ 	primIdx = (primIdx >> 1);
+ 	/* begin functionPointerFor:inClass: */
+-	primitiveFunctionPointer = ((void (*)(void)) ((primIdx > MaxPrimitiveIndex
+-	? 0
+-	: primitiveTable[primIdx])));
++	primitiveFunctionPointer = primitiveFunctionPointerForIndex(primIdx);
+ 	if (primitiveFunctionPointer == 0) {
+ 		primitiveFunctionPointer = primitiveDoPrimitiveWithArgs;
+ 		/* begin primitiveFailFor: */
+@@ -66095,7 +66102,7 @@ primitiveDoPrimitiveWithArgs(void)
+ 		GIV(stackPointer) = sp1;
+ 		index += 1;
+ 	}
+-	if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++	if (isPrimitiveFunctionPointerAnIndex()) {
+ 		externalQuickPrimitiveResponse();
+ 		GIV(tempOop2) = 0;
+ 		return;
+@@ -66215,13 +66222,11 @@ primitiveExecuteMethod(void)
+ 		primitiveIndex = 0;
+ 	}
+ 	/* begin functionPointerFor:inClass: */
+-	primitiveFunctionPointer = ((void (*)(void)) ((primitiveIndex > MaxPrimitiveIndex
+-	? 0
+-	: primitiveTable[primitiveIndex])));
++	primitiveFunctionPointer = primitiveFunctionPointerForIndex(primitiveIndex);
+ 	GIV(argumentCount) -= 1;
+ 	/* begin executeNewMethod */
+ 	if (primitiveFunctionPointer != 0) {
+-		if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++		if (isPrimitiveFunctionPointerAnIndex()) {
+ 			externalQuickPrimitiveResponse();
+ 			goto l14;
+ 		}
+@@ -66408,13 +66413,11 @@ primitiveExecuteMethodArgsArray(void)
+ 		primitiveIndex = 0;
+ 	}
+ 	/* begin functionPointerFor:inClass: */
+-	primitiveFunctionPointer = ((void (*)(void)) ((primitiveIndex > MaxPrimitiveIndex
+-	? 0
+-	: primitiveTable[primitiveIndex])));
++	primitiveFunctionPointer = primitiveFunctionPointerForIndex(primitiveIndex);
+ 	GIV(argumentCount) = argCnt;
+ 	/* begin executeNewMethod */
+ 	if (primitiveFunctionPointer != 0) {
+-		if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++		if (isPrimitiveFunctionPointerAnIndex()) {
+ 			externalQuickPrimitiveResponse();
+ 			goto l19;
+ 		}
+@@ -67606,7 +67609,7 @@ primitivePerform(void)
+ 	}
+ 	/* begin executeNewMethod */
+ 	if (primitiveFunctionPointer != 0) {
+-		if ((((usqIntptr_t) primitiveFunctionPointer)) <= MaxQuickPrimitiveIndex) {
++		if (isPrimitiveFunctionPointerAnIndex()) {
+ 			externalQuickPrimitiveResponse();
+ 			goto l12;
+ 		}
+@@ -70610,6 +70613,48 @@ unmarkAllFrames(void)
+ }
+ 
+ 
++#if defined(__wasm32__)
++# define DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(name) static void name##WasmVoidWrapper(void) { (void)name(); }
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveBytecodeSetsAvailable)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveClockLogAddresses)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveCompareBytes)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveCrashVM)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveDisablePowerManager)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveGetenv)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveGetLogDirectory)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveGetWindowLabel)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveGetWindowSize)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveHeartbeatFrequency)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveHighResClock)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveImageFormatVersion)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveInterruptChecksPerMSec)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveIsBigEnder)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveIsWindowObscured)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveMillisecondClockMask)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveMultipleBytecodeSetsActive)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitivePathToUsing)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveProfilePrimitive)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveProfileSample)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveProfileSemaphore)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveProfileStart)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveScreenDepth)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveScreenScaleFactor)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveSetLogDirectory)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveSetWindowLabel)
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveSetWindowSize)
++#if TestingPrimitives
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveTestShortenIndexableSize)
++#endif
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveUtcWithOffset)
++#if LRPCheck
++DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER(primitiveLongRunningPrimitiveSemaphore)
++#endif
++# undef DEFINE_SQINT_PRIMITIVE_VOID_WRAPPER
++# define VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name##WasmVoidWrapper
++#else
++# define VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(name) (void*)name
++#endif
++
+ static char _m[] = "";
+ void* vm_exports[][3] = {
+ 	{(void*)_m, "moduleUnloaded", (void*)moduleUnloaded},
+@@ -70620,28 +70665,28 @@ void* vm_exports[][3] = {
+ 	{(void*)_m, "primitiveBitOrLargeIntegers\000\000\001", (void*)primitiveBitOrLargeIntegers},
+ 	{(void*)_m, "primitiveBitShiftLargeIntegers\000\000\001", (void*)primitiveBitShiftLargeIntegers},
+ 	{(void*)_m, "primitiveBitXorLargeIntegers\000\000\001", (void*)primitiveBitXorLargeIntegers},
+-	{(void*)_m, "primitiveBytecodeSetsAvailable\000\377\000", (void*)primitiveBytecodeSetsAvailable},
+-	{(void*)_m, "primitiveClockLogAddresses\000\000\000", (void*)primitiveClockLogAddresses},
+-	{(void*)_m, "primitiveCompareBytes\000\001\001", (void*)primitiveCompareBytes},
++	{(void*)_m, "primitiveBytecodeSetsAvailable\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveBytecodeSetsAvailable)},
++	{(void*)_m, "primitiveClockLogAddresses\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveClockLogAddresses)},
++	{(void*)_m, "primitiveCompareBytes\000\001\001", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveCompareBytes)},
+ 	{(void*)_m, "primitiveCompareWith\000\001\000", (void*)primitiveCompareWith},
+-	{(void*)_m, "primitiveCrashVM\000\000\000", (void*)primitiveCrashVM},
+-	{(void*)_m, "primitiveDisablePowerManager\000\000\000", (void*)primitiveDisablePowerManager},
++	{(void*)_m, "primitiveCrashVM\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveCrashVM)},
++	{(void*)_m, "primitiveDisablePowerManager\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveDisablePowerManager)},
+ 	{(void*)_m, "primitiveDivideLargeIntegers\000\000\001", (void*)primitiveDivideLargeIntegers},
+ 	{(void*)_m, "primitiveDivLargeIntegers\000\000\001", (void*)primitiveDivLargeIntegers},
+ 	{(void*)_m, "primitiveEqualLargeIntegers\000\000\001", (void*)primitiveEqualLargeIntegers},
+ 	{(void*)_m, "primitiveEventProcessingControl\000\000\000", (void*)primitiveEventProcessingControl},
+-	{(void*)_m, "primitiveGetenv\000\000\000", (void*)primitiveGetenv},
+-	{(void*)_m, "primitiveGetLogDirectory\000\377\000", (void*)primitiveGetLogDirectory},
+-	{(void*)_m, "primitiveGetWindowLabel\000\377\000", (void*)primitiveGetWindowLabel},
+-	{(void*)_m, "primitiveGetWindowSize\000\377\000", (void*)primitiveGetWindowSize},
++	{(void*)_m, "primitiveGetenv\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveGetenv)},
++	{(void*)_m, "primitiveGetLogDirectory\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveGetLogDirectory)},
++	{(void*)_m, "primitiveGetWindowLabel\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveGetWindowLabel)},
++	{(void*)_m, "primitiveGetWindowSize\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveGetWindowSize)},
+ 	{(void*)_m, "primitiveGreaterOrEqualLargeIntegers\000\000\001", (void*)primitiveGreaterOrEqualLargeIntegers},
+ 	{(void*)_m, "primitiveGreaterThanLargeIntegers\000\000\001", (void*)primitiveGreaterThanLargeIntegers},
+-	{(void*)_m, "primitiveHeartbeatFrequency\000\000\000", (void*)primitiveHeartbeatFrequency},
+-	{(void*)_m, "primitiveHighResClock\000\377\001", (void*)primitiveHighResClock},
+-	{(void*)_m, "primitiveImageFormatVersion\000\377\000", (void*)primitiveImageFormatVersion},
+-	{(void*)_m, "primitiveInterruptChecksPerMSec\000\377\000", (void*)primitiveInterruptChecksPerMSec},
+-	{(void*)_m, "primitiveIsBigEnder\000\377\000", (void*)primitiveIsBigEnder},
+-	{(void*)_m, "primitiveIsWindowObscured\000\377\000", (void*)primitiveIsWindowObscured},
++	{(void*)_m, "primitiveHeartbeatFrequency\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveHeartbeatFrequency)},
++	{(void*)_m, "primitiveHighResClock\000\377\001", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveHighResClock)},
++	{(void*)_m, "primitiveImageFormatVersion\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveImageFormatVersion)},
++	{(void*)_m, "primitiveInterruptChecksPerMSec\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveInterruptChecksPerMSec)},
++	{(void*)_m, "primitiveIsBigEnder\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveIsBigEnder)},
++	{(void*)_m, "primitiveIsWindowObscured\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveIsWindowObscured)},
+ 	{(void*)_m, "primitiveLessOrEqualLargeIntegers\000\000\001", (void*)primitiveLessOrEqualLargeIntegers},
+ 	{(void*)_m, "primitiveLessThanLargeIntegers\000\000\001", (void*)primitiveLessThanLargeIntegers},
+ #if LRPCheck
+@@ -70650,30 +70695,30 @@ void* vm_exports[][3] = {
+ #if LRPCheck
+ 	{(void*)_m, "primitiveLongRunningPrimitiveSemaphore\000\000\000", (void*)primitiveLongRunningPrimitiveSemaphore},
+ #endif /* LRPCheck */
+-	{(void*)_m, "primitiveMillisecondClockMask\000\377\000", (void*)primitiveMillisecondClockMask},
++	{(void*)_m, "primitiveMillisecondClockMask\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveMillisecondClockMask)},
+ 	{(void*)_m, "primitiveModLargeIntegers\000\000\001", (void*)primitiveModLargeIntegers},
+-	{(void*)_m, "primitiveMultipleBytecodeSetsActive\000\000\000", (void*)primitiveMultipleBytecodeSetsActive},
++	{(void*)_m, "primitiveMultipleBytecodeSetsActive\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveMultipleBytecodeSetsActive)},
+ 	{(void*)_m, "primitiveMultiplyLargeIntegers\000\000\001", (void*)primitiveMultiplyLargeIntegers},
+ 	{(void*)_m, "primitiveNotEqualLargeIntegers\000\000\001", (void*)primitiveNotEqualLargeIntegers},
+-	{(void*)_m, "primitivePathToUsing\000\000\000", (void*)primitivePathToUsing},
+-	{(void*)_m, "primitiveProfilePrimitive\000\377\001", (void*)primitiveProfilePrimitive},
+-	{(void*)_m, "primitiveProfileSample\000\377\001", (void*)primitiveProfileSample},
+-	{(void*)_m, "primitiveProfileSemaphore\000\000\000", (void*)primitiveProfileSemaphore},
+-	{(void*)_m, "primitiveProfileStart\000\000\001", (void*)primitiveProfileStart},
++	{(void*)_m, "primitivePathToUsing\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitivePathToUsing)},
++	{(void*)_m, "primitiveProfilePrimitive\000\377\001", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveProfilePrimitive)},
++	{(void*)_m, "primitiveProfileSample\000\377\001", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveProfileSample)},
++	{(void*)_m, "primitiveProfileSemaphore\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveProfileSemaphore)},
++	{(void*)_m, "primitiveProfileStart\000\000\001", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveProfileStart)},
+ 	{(void*)_m, "primitiveQuoLargeIntegers\000\000\001", (void*)primitiveQuoLargeIntegers},
+ 	{(void*)_m, "primitiveRemLargeIntegers\000\000\001", (void*)primitiveRemLargeIntegers},
+-	{(void*)_m, "primitiveScreenDepth\000\377\000", (void*)primitiveScreenDepth},
+-	{(void*)_m, "primitiveScreenScaleFactor\000\377\000", (void*)primitiveScreenScaleFactor},
++	{(void*)_m, "primitiveScreenDepth\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveScreenDepth)},
++	{(void*)_m, "primitiveScreenScaleFactor\000\377\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveScreenScaleFactor)},
+ 	{(void*)_m, "primitiveSetGCSemaphore\000\000\000", (void*)primitiveSetGCSemaphore},
+-	{(void*)_m, "primitiveSetLogDirectory\000\001\000", (void*)primitiveSetLogDirectory},
+-	{(void*)_m, "primitiveSetWindowLabel\000\001\000", (void*)primitiveSetWindowLabel},
+-	{(void*)_m, "primitiveSetWindowSize\000\000\000", (void*)primitiveSetWindowSize},
++	{(void*)_m, "primitiveSetLogDirectory\000\001\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveSetLogDirectory)},
++	{(void*)_m, "primitiveSetWindowLabel\000\001\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveSetWindowLabel)},
++	{(void*)_m, "primitiveSetWindowSize\000\000\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveSetWindowSize)},
+ 	{(void*)_m, "primitiveSubtractLargeIntegers\000\000\001", (void*)primitiveSubtractLargeIntegers},
+ 	{(void*)_m, "primitiveSuspendBackingUpV2\000\002\000", (void*)primitiveSuspendBackingUpV2},
+ #if TestingPrimitives
+-	{(void*)_m, "primitiveTestShortenIndexableSize\000\001\000", (void*)primitiveTestShortenIndexableSize},
++	{(void*)_m, "primitiveTestShortenIndexableSize\000\001\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveTestShortenIndexableSize)},
+ #endif /* TestingPrimitives */
+-	{(void*)_m, "primitiveUtcWithOffset\000\001\000", (void*)primitiveUtcWithOffset},
++	{(void*)_m, "primitiveUtcWithOffset\000\001\000", VM_SQINT_PRIMITIVE_EXPORT_ADDRESS(primitiveUtcWithOffset)},
+ 	{(void*)_m, "primitiveVoidReceiver\000\377\000", (void*)primitiveVoidReceiver},
+ 	{NULL, NULL, NULL}
+ };

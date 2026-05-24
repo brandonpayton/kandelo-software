@@ -5,6 +5,9 @@ redis
 redis-vfs
 ruby
 nethack
+squeak
+squeak-v3
+squeak-etoys-vfs
 python-vfs
 perl-vfs
 erlang-vfs

@@ -1,0 +1,7 @@
+script_path = "packages/registry/squeak/build-squeak.sh"
+repo_url = "https://github.com/OpenSmalltalk/opensmalltalk-vm"
+commit = "cc2dd909045721f6cbf16cb62f5662fe68158021"
+revision = 1
+
+[binary]
+index_url = "https://github.com/brandonpayton/kandelo-software/releases/download/binaries-abi-v{abi}/index.toml"

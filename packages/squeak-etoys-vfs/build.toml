@@ -1,0 +1,7 @@
+script_path = "packages/registry/squeak-etoys-vfs/build-squeak-etoys-vfs.sh"
+repo_url = "https://etoysillinois.org/downloads/Etoys-To-Go-5.0.zip"
+commit = "Etoys-To-Go-5.0"
+revision = 1
+
+[binary]
+index_url = "https://github.com/brandonpayton/kandelo-software/releases/download/binaries-abi-v{abi}/index.toml"

@@ -1,0 +1,20 @@
+kind = "program"
+name = "squeak-etoys-vfs"
+version = "5.0-20260523"
+kernel_abi = 12
+depends_on = ["squeak-v3@5.0-20260523"]
+
+[source]
+url = "https://etoysillinois.org/downloads/Etoys-To-Go-5.0.zip"
+sha256 = "e197b4800e397e101445a246dae871389dc89572f8756df71658e8ccec14ba5e"
+
+[license]
+spdx = "MIT"
+url = "http://squeakland.org/download/"
+
+[build]
+script_path = "packages/registry/squeak-etoys-vfs/build-squeak-etoys-vfs.sh"
+
+[[outputs]]
+name = "squeak-etoys-vfs"
+wasm = "squeak-etoys-vfs.vfs.zst"

@@ -1,0 +1,74 @@
+diff --git a/src/v3.stack/interp.c b/src/v3.stack/interp.c
+index d8b59c3cb..b9cd0975c 100644
+--- a/src/v3.stack/interp.c
++++ b/src/v3.stack/interp.c
+@@ -23610,7 +23610,8 @@ loadImageSegmentFromoutPointers(sqInt segmentWordArray, sqInt outPointerArray)
+ 	endSeg = (segmentWordArray + (sizeBitsOf(segmentWordArray))) - BaseHeaderSize;
+ 	data = longAt(segmentWordArray + BaseHeaderSize);
+ 	if (!(((data & 0xFFFF) == (6505))
+-		 || ((data & 0xFFFF) == (6504)))) {
++		 || ((data & 0xFFFF) == (6504))
++		 || ((data & 0xFFFF) == (6502)))) {
+ 
+ 		/* low 2 bytes */
+ 		/* Not readable -- try again with reversed bytes... */
+@@ -23628,7 +23629,8 @@ loadImageSegmentFromoutPointers(sqInt segmentWordArray, sqInt outPointerArray)
+ 		}
+ 		data = longAt(segmentWordArray + BaseHeaderSize);
+ 		if (!(((data & 0xFFFF) == (6505))
+-			 || ((data & 0xFFFF) == (6504)))) {
++			 || ((data & 0xFFFF) == (6504))
++			 || ((data & 0xFFFF) == (6502)))) {
+ 
+ 			/* low 2 bytes */
+ 			/* Still NG -- put things back and fail */
+@@ -30828,7 +30830,8 @@ checkImageVersionFromstartingAt(sqImageFile f, squeakFileOffsetType imageOffset)
+ 	sqImageFileSeek(f, imageOffset);
+ 	version = (firstVersion = getWord32FromFileswap(f, 0));
+ 	if ((version == (6505))
+-	 || (version == (6504))) {
++	 || (version == (6504))
++	 || (version == (6502))) {
+ 		return 0;
+ 	}
+ 	sqImageFileSeek(f, imageOffset);
+@@ -30837,7 +30840,8 @@ checkImageVersionFromstartingAt(sqImageFile f, squeakFileOffsetType imageOffset)
+ 	sqImageFileRead((&w2), sizeof(int), 1, f);
+ 	version = SQ_SWAP_4_BYTES(w2);
+ 	if ((version == (6505))
+-	 || (version == (6504))) {
++	 || (version == (6504))
++	 || (version == (6502))) {
+ 		return 1;
+ 	}
+ 	if (imageOffset == 0) {
+@@ -30849,7 +30853,8 @@ checkImageVersionFromstartingAt(sqImageFile f, squeakFileOffsetType imageOffset)
+ 		sqImageFileRead((&w), sizeof(int), 1, f);
+ 		version = w;
+ 		if ((version == (6505))
+-		 || (version == (6504))) {
++		 || (version == (6504))
++		 || (version == (6502))) {
+ 			return 0;
+ 		}
+ 		sqImageFileSeek(f, 0x200);
+@@ -30858,7 +30863,8 @@ checkImageVersionFromstartingAt(sqImageFile f, squeakFileOffsetType imageOffset)
+ 		sqImageFileRead((&w1), sizeof(int), 1, f);
+ 		version = SQ_SWAP_4_BYTES(w1);
+ 		if ((version == (6505))
+-		 || (version == (6504))) {
++		 || (version == (6504))
++		 || (version == (6502))) {
+ 			return 1;
+ 		}
+ 	}
+@@ -39981,7 +39987,8 @@ sqInt
+ readableFormat(sqInt imageVersion)
+ {
+ 	return (imageVersion == (6505))
+-	 || (imageVersion == (6504));
++	 || (imageVersion == (6504))
++	 || (imageVersion == (6502));
+ }
+ 
+ 

@@ -86,6 +86,12 @@ If a VFS image builder needs an installed wasm binary at runtime, its
 wrapper should also resolve that package before invoking the image
 builder so subset publishes keep working.
 
+VFS image packages can depend on packages from Kandelo core as well as
+packages in this repository. For example, `clang-demo-vfs` consumes the
+core `kandelo-sdk` package and this repository's `clang` package, but
+only lists software-repository packages in `gallery.json` because the
+gallery availability check reads this repository's release index.
+
 If the package should appear in Kandelo's browser gallery, add an entry
 to `gallery.json`. The gallery entry should list every package that must
 be available for the demo; Kandelo only shows the entry when the release

@@ -20,11 +20,12 @@ temporarily removed from browser-demo rebuilds, plus NetHack:
 | `texlive` | program/runtime | `pdftex.wasm` plus TeX Live bundle |
 | `nethack` | program | NetHack `nethack.wasm` |
 | `clang` | program/toolchain | Clang, `wasm-ld`, and LLVM binutils for Kandelo |
+| `clang-demo-vfs` | VFS image | Kandelo SDK shell image with Clang staged for C/C++ editing and compilation |
 
 The Clang payload is intentionally separate from Kandelo's core SDK VFS
-image. Consumers should stage the `clang` package outputs as lazy files,
-or bundle them into a lazy archive, instead of embedding the full
-toolchain inside the SDK image.
+image. The demo VFS composes the core SDK package and the `clang`
+package into one browser-bootable image; other consumers can stage the
+`clang` package outputs as lazy files or bundle them into a lazy archive.
 
 The package recipes live under `packages/<name>/`. They use Kandelo's
 current two-file package shape:

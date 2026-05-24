@@ -57,7 +57,7 @@ install_hints = { darwin = "ships with Xcode Command Line Tools; or: brew instal
 
 [[host_tools]]
 name = "python3"
-version_constraint = ">=3.8"
+version_constraint = ">=3.10"
 probe = { args = ["--version"], version_regex = "Python (\\d+\\.\\d+(?:\\.\\d+)?)" }
 install_hints = { darwin = "brew install python", linux = "apt install python3" }
 

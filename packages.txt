@@ -10,3 +10,4 @@ perl-vfs
 erlang-vfs
 texlive
 clang
+clang-demo-vfs

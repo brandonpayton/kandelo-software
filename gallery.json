@@ -47,6 +47,17 @@
         { "name": "redis-vfs", "version": "0.1.0" }
       ],
       "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/redis-vfs"
+    },
+    {
+      "id": "clang-demo-vfs",
+      "title": "Kandelo C/C++ SDK",
+      "description": "Shell workspace with vim, the Kandelo SDK, Clang, libc, libc++, and sample C/C++ programs.",
+      "kind": "vfs-image",
+      "packages": [
+        { "name": "clang", "version": "21" },
+        { "name": "clang-demo-vfs", "version": "0.1.0" }
+      ],
+      "package_url": "https://github.com/brandonpayton/kandelo-software/tree/main/packages/clang-demo-vfs"
     }
   ]
 }

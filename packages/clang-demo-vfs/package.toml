@@ -1,0 +1,24 @@
+kind = "program"
+name = "clang-demo-vfs"
+version = "0.1.0"
+kernel_abi = 12
+depends_on = ["kandelo-sdk@0.1.0", "clang@21"]
+
+# Browser demo VFS for editing, compiling, and running small C/C++ programs
+# in Kandelo. The core SDK package supplies the sysroot, wrapper scripts,
+# syscall glue, and clang resource headers; the clang package supplies the
+# compiler and linker binaries.
+[source]
+url = "https://github.com/brandonpayton/kandelo-software"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[license]
+spdx = "GPL-2.0-or-later AND MIT AND Apache-2.0 WITH LLVM-exception"
+url = "https://github.com/brandonpayton/kandelo-software"
+
+[build]
+script_path = "packages/registry/clang-demo-vfs/build-clang-demo-vfs.sh"
+
+[[outputs]]
+name = "clang-demo-vfs"
+wasm = "clang-demo-vfs.vfs.zst"

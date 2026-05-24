@@ -26,6 +26,7 @@ fi
 
 for pkg_dir in "$SOFTWARE_ROOT"/packages/*; do
   [ -d "$pkg_dir" ] || continue
+  [ -f "$pkg_dir/package.toml" ] || continue
   pkg="$(basename "$pkg_dir")"
   dest="$PRIMARY_ROOT/$pkg"
   rm -rf "$dest"

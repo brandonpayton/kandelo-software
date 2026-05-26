@@ -26,6 +26,12 @@ if [[ -z "$CLANG_DIR" || ! -f "$CLANG_DIR/clang.wasm" || ! -f "$CLANG_DIR/wasm-l
   CLANG_DIR="$(resolve_dep clang)"
 fi
 
+# The full shell populator mounts vim and NetHack as lazy archives.
+# These bundles are build products of the core shell environment, not direct
+# package archive outputs, so make sure they exist for source builds.
+bash "$REPO_ROOT/images/vfs/scripts/build-vim-zip.sh"
+bash "$REPO_ROOT/images/vfs/scripts/build-nethack-zip.sh"
+
 export KANDELO_SDK_VFS_IN="$SDK_DIR/kandelo-sdk.vfs.zst"
 export KANDELO_CLANG_BIN_DIR="$CLANG_DIR"
 export KANDELO_CLANG_DEMO_VFS_OUT="$SCRIPT_DIR/clang-demo-vfs.vfs.zst"

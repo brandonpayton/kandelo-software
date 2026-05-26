@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryFileSystem } from "../../../host/src/vfs/memory-fs";
+import { populateShellEnvironment } from "../../../images/vfs/scripts/shell-vfs-build";
 import {
   ensureDirRecursive,
   saveImage,
@@ -14,7 +15,16 @@ const SDK_VFS_IN = process.env.KANDELO_SDK_VFS_IN;
 const CLANG_BIN_DIR = process.env.KANDELO_CLANG_BIN_DIR;
 const OUT_FILE = process.env.KANDELO_CLANG_DEMO_VFS_OUT ??
   "apps/browser-demos/public/clang-demo-vfs.vfs.zst";
-const MAX_VFS_MB = Number.parseInt(process.env.KANDELO_CLANG_DEMO_MAX_VFS_MB ?? "256", 10);
+const VFS_MB = Number.parseInt(
+  process.env.KANDELO_CLANG_DEMO_VFS_MB ??
+    process.env.KANDELO_CLANG_DEMO_MAX_VFS_MB ??
+    "384",
+  10,
+);
+
+const S_IFMT = 0xf000;
+const S_IFDIR = 0x4000;
+const S_IFLNK = 0xa000;
 
 if (!SDK_VFS_IN || !existsSync(SDK_VFS_IN)) {
   throw new Error(`KANDELO_SDK_VFS_IN is not a readable SDK VFS image: ${SDK_VFS_IN ?? ""}`);
@@ -34,11 +44,96 @@ function installTool(fs: MemoryFileSystem, artifact: string, path: string): void
   writeVfsBinary(fs, path, new Uint8Array(readFileSync(clangToolPath(artifact))), 0o755);
 }
 
+function dirname(path: string): string {
+  const idx = path.lastIndexOf("/");
+  if (idx <= 0) return "/";
+  return path.slice(0, idx);
+}
+
+function joinVfsPath(parent: string, name: string): string {
+  return parent === "/" ? `/${name}` : `${parent}/${name}`;
+}
+
+function isDir(mode: number): boolean {
+  return (mode & S_IFMT) === S_IFDIR;
+}
+
+function isSymlink(mode: number): boolean {
+  return (mode & S_IFMT) === S_IFLNK;
+}
+
+function unlinkNonDirectoryIfPresent(fs: MemoryFileSystem, path: string): void {
+  try {
+    const st = fs.lstat(path);
+    if (!isDir(st.mode)) fs.unlink(path);
+  } catch {
+    // Missing path is fine.
+  }
+}
+
+function readVfsBinary(fs: MemoryFileSystem, path: string, size: number): Uint8Array {
+  const fd = fs.open(path, 0, 0);
+  const data = new Uint8Array(size);
+  let off = 0;
+  try {
+    while (off < size) {
+      const n = fs.read(fd, data.subarray(off), null, size - off);
+      if (n <= 0) break;
+      off += n;
+    }
+  } finally {
+    fs.close(fd);
+  }
+  return off === size ? data : data.slice(0, off);
+}
+
+function copyVfsTree(dst: MemoryFileSystem, src: MemoryFileSystem, path = "/"): number {
+  const st = src.lstat(path);
+
+  if (isSymlink(st.mode)) {
+    ensureDirRecursive(dst, dirname(path));
+    unlinkNonDirectoryIfPresent(dst, path);
+    symlink(dst, src.readlink(path), path);
+    return 1;
+  }
+
+  if (!isDir(st.mode)) {
+    ensureDirRecursive(dst, dirname(path));
+    unlinkNonDirectoryIfPresent(dst, path);
+    writeVfsBinary(dst, path, readVfsBinary(src, path, st.size), st.mode & 0o777);
+    return 1;
+  }
+
+  if (path !== "/") {
+    ensureDirRecursive(dst, path);
+    dst.chmod(path, st.mode & 0o777);
+  }
+
+  let count = 0;
+  const dir = src.opendir(path);
+  try {
+    for (;;) {
+      const entry = src.readdir(dir);
+      if (!entry) break;
+      if (entry.name === "." || entry.name === "..") continue;
+      count += copyVfsTree(dst, src, joinVfsPath(path, entry.name));
+    }
+  } finally {
+    src.closedir(dir);
+  }
+  return count;
+}
+
 async function main(): Promise<void> {
-  const sdkImage = new Uint8Array(readFileSync(SDK_VFS_IN!));
-  const fs = MemoryFileSystem.fromImage(sdkImage, {
-    maxByteLength: MAX_VFS_MB * 1024 * 1024,
-  });
+  const sab = new SharedArrayBuffer(VFS_MB * 1024 * 1024);
+  const fs = MemoryFileSystem.create(sab);
+
+  console.log("Populating full shell environment...");
+  populateShellEnvironment(fs, { eagerBinaries: true });
+
+  console.log("Layering Kandelo SDK VFS...");
+  const sdkImage = MemoryFileSystem.fromImage(new Uint8Array(readFileSync(SDK_VFS_IN!)));
+  const sdkFiles = copyVfsTree(fs, sdkImage);
 
   for (const dir of [
     "/etc",
@@ -85,10 +180,15 @@ async function main(): Promise<void> {
   writeVfsFile(fs, KANDELO_DEMO_CONFIG_PATH, `${JSON.stringify(demoConfig(), null, 2)}\n`, 0o644);
 
   await saveImage(fs, OUT_FILE);
+  console.log(`Layered ${sdkFiles} SDK VFS entries`);
 }
 
 function shellProfile(): string {
   return [
+    "alias ls='ls --color=auto'",
+    "alias grep='grep --color=auto'",
+    "export USER=player",
+    "export NETHACKOPTIONS='windowtype:curses,color,lit_corridor,hilite_pet'",
     "export HOME=/home",
     "export TMPDIR=/tmp",
     "export TERM=${TERM:-xterm-256color}",

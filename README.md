@@ -23,9 +23,10 @@ temporarily removed from browser-demo rebuilds, plus NetHack:
 | `clang-demo-vfs` | VFS image | Kandelo SDK shell image with Clang staged for C/C++ editing and compilation |
 
 The Clang payload is intentionally separate from Kandelo's core SDK VFS
-image. The demo VFS composes the core SDK package and the `clang`
-package into one browser-bootable image; other consumers can stage the
-`clang` package outputs as lazy files or bundle them into a lazy archive.
+image. The demo VFS starts with Kandelo's full shell environment, then
+composes the core SDK package and the `clang` package into one
+browser-bootable image; other consumers can stage the `clang` package
+outputs as lazy files or bundle them into a lazy archive.
 
 The package recipes live under `packages/<name>/`. They use Kandelo's
 current two-file package shape:

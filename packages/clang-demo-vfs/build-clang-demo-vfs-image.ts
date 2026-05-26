@@ -157,7 +157,7 @@ async function main(): Promise<void> {
 
   console.log("Installing clang tool binaries...");
   installTool(fs, "clang.wasm", "/usr/lib/llvm/bin/clang");
-  installTool(fs, "clang++.wasm", "/usr/lib/llvm/bin/clang++");
+  symlink(fs, "/usr/lib/llvm/bin/clang", "/usr/lib/llvm/bin/clang++");
   installTool(fs, "wasm-ld.wasm", "/usr/lib/llvm/bin/wasm-ld");
   installTool(fs, "llvm-ar.wasm", "/usr/lib/llvm/bin/llvm-ar");
   installTool(fs, "llvm-ranlib.wasm", "/usr/lib/llvm/bin/llvm-ranlib");

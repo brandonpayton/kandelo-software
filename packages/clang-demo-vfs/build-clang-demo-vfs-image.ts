@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryFileSystem } from "../../../host/src/vfs/memory-fs";
+import {
+  COREUTILS_NAMES,
+  SHELL_LAZY_BINARY_SPECS,
+} from "../../../images/vfs/lib/init/shell-binaries";
 import { populateShellEnvironment } from "../../../images/vfs/scripts/shell-vfs-build";
 import {
   ensureDirRecursive,
@@ -18,7 +22,7 @@ const OUT_FILE = process.env.KANDELO_CLANG_DEMO_VFS_OUT ??
 const VFS_MB = Number.parseInt(
   process.env.KANDELO_CLANG_DEMO_VFS_MB ??
     process.env.KANDELO_CLANG_DEMO_MAX_VFS_MB ??
-    "384",
+    "256",
   10,
 );
 
@@ -179,8 +183,53 @@ async function main(): Promise<void> {
   writeVfsFile(fs, "/home/build.sh", buildScript(), 0o755);
   writeVfsFile(fs, KANDELO_DEMO_CONFIG_PATH, `${JSON.stringify(demoConfig(), null, 2)}\n`, 0o644);
 
+  console.log("Verifying shell utility paths...");
+  verifyShellUtilities(fs);
+
   await saveImage(fs, OUT_FILE);
   console.log(`Layered ${sdkFiles} SDK VFS entries`);
+}
+
+function verifyExecutablePath(fs: MemoryFileSystem, path: string): void {
+  let st;
+  try {
+    st = fs.stat(path);
+  } catch (err) {
+    throw new Error(`required executable is missing from clang demo VFS: ${path}`, {
+      cause: err,
+    });
+  }
+  if ((st.mode & 0o111) === 0) {
+    throw new Error(`required executable is not marked executable in clang demo VFS: ${path}`);
+  }
+}
+
+function verifyShellUtilities(fs: MemoryFileSystem): void {
+  for (const path of [
+    "/bin/sh",
+    "/bin/dash",
+    "/bin/bash",
+    "/usr/bin/bash",
+    "/bin/coreutils",
+    "/usr/bin/vim",
+    "/bin/vim",
+    "/usr/bin/nethack",
+    "/bin/nethack",
+  ]) {
+    verifyExecutablePath(fs, path);
+  }
+
+  for (const name of [...COREUTILS_NAMES, "["]) {
+    verifyExecutablePath(fs, `/bin/${name}`);
+    verifyExecutablePath(fs, `/usr/bin/${name}`);
+  }
+
+  for (const spec of SHELL_LAZY_BINARY_SPECS) {
+    verifyExecutablePath(fs, spec.vfsPath);
+    for (const path of spec.symlinks) {
+      verifyExecutablePath(fs, path);
+    }
+  }
 }
 
 function shellProfile(): string {

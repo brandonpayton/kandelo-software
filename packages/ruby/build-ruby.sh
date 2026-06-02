@@ -7,7 +7,7 @@ set -euo pipefail
 #   1. Host-native miniruby (generates C source files during cross-compilation)
 #   2. Cross-compile Ruby for wasm32 using the SDK toolchain
 #
-# Output: examples/libs/ruby/bin/ruby.wasm
+# Output: packages/registry/ruby/bin/ruby.wasm
 #
 # Prerequisites:
 #   - bash build.sh (kernel + sysroot)

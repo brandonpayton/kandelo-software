@@ -5,7 +5,7 @@ on:
     inputs:
       kandelo-repository:
         type: string
-        default: brandonpayton/wasm-posix-kernel
+        default: brandonpayton/kandelo
       kandelo-ref:
         type: string
         default: main

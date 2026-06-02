@@ -55,7 +55,7 @@ build_publish_one() {
   local version="$2"
   local revision="$3"
   local arch="$4"
-  local pkg_dir="$KANDELO_ROOT/examples/libs/$pkg"
+  local pkg_dir="$5"
 
   local sha short suffix out_dir archive_path archive_name
   sha="$(cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
@@ -102,13 +102,36 @@ build_publish_one() {
     --cache-key-sha "$sha"
 }
 
+package_dir_for() {
+  local pkg="$1"
+  local registry_dir="$KANDELO_ROOT/packages/registry/$pkg"
+  local legacy_dir="$KANDELO_ROOT/examples/libs/$pkg"
+
+  if [ -f "$registry_dir/package.toml" ] &&
+      grep -q 'script_path *= *"packages/registry/' "$registry_dir/package.toml" "$registry_dir/build.toml" 2>/dev/null; then
+    printf '%s\n' "$registry_dir"
+    return 0
+  fi
+
+  if [ -d "$legacy_dir" ]; then
+    printf '%s\n' "$legacy_dir"
+    return 0
+  fi
+
+  if [ -d "$registry_dir" ]; then
+    printf '%s\n' "$registry_dir"
+    return 0
+  fi
+
+  return 1
+}
+
 mapfile -t ordered <"$SOFTWARE_ROOT/packages.txt"
 for pkg in "${ordered[@]}"; do
   [ -n "$pkg" ] || continue
   want_pkg "$pkg" || continue
 
-  pkg_dir="$KANDELO_ROOT/examples/libs/$pkg"
-  [ -d "$pkg_dir" ] || {
+  pkg_dir="$(package_dir_for "$pkg")" || {
     echo "build-and-publish: package missing after sync: $pkg" >&2
     exit 1
   }
@@ -120,7 +143,7 @@ for pkg in "${ordered[@]}"; do
   arches="${arches:-wasm32}"
 
   for arch in $arches; do
-    if ! build_publish_one "$pkg" "$version" "$revision" "$arch"; then
+    if ! build_publish_one "$pkg" "$version" "$revision" "$arch" "$pkg_dir"; then
       echo "build-and-publish: WARN $pkg/$arch failed; continuing" >&2
       FAILED+=("$pkg/$arch")
     fi

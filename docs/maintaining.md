@@ -14,8 +14,10 @@ gallery.json                     # browser-gallery entries gated by index.toml
 ```
 
 The workflow overlays each package into a Kandelo checkout at
-`examples/libs/<name>/` before building. That keeps the existing build
-scripts working without duplicating Kandelo's SDK, `xtask`, browser VFS
+`packages/registry/<name>/` for current Kandelo checkouts before
+building. It also mirrors the packages to `examples/libs/<name>/` for
+compatibility with older Kandelo checkouts. That keeps the build scripts
+Kandelo-relative without duplicating Kandelo's SDK, `xtask`, browser VFS
 builders, or release archive code in this repository.
 
 ## Package Schema
@@ -32,16 +34,16 @@ Those belong in `build.toml` or in the release `index.toml` generated
 at publish time.
 
 For packages with a `[build]` block, `kernel_abi` must match the
-Kandelo `ABI_VERSION` used by the publish workflow. The current package
-set targets ABI 11.
+Kandelo `ABI_VERSION` used by the publish workflow. New package recipes
+should target the current Kandelo ABI.
 
 `build.toml` should use the indexed binary form:
 
 ```toml
-script_path = "examples/libs/nethack/build-nethack.sh"
+script_path = "packages/registry/clang/build-clang.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
-revision    = 2
+revision    = 1
 
 [binary]
 index_url = "https://github.com/brandonpayton/kandelo-software/releases/download/binaries-abi-v{abi}/index.toml"
@@ -56,7 +58,7 @@ The same script used by Actions can run locally if `gh`, Nix, Rust, and
 the Kandelo build prerequisites are available:
 
 ```bash
-git clone https://github.com/brandonpayton/wasm-posix-kernel kandelo
+git clone https://github.com/brandonpayton/kandelo kandelo
 cd kandelo
 bash scripts/dev-shell.sh true
 cd ..
@@ -83,6 +85,12 @@ reads the CPython source tree and stdlib staged by the CPython build.
 If a VFS image builder needs an installed wasm binary at runtime, its
 wrapper should also resolve that package before invoking the image
 builder so subset publishes keep working.
+
+VFS image packages can depend on packages from Kandelo core as well as
+packages in this repository. For example, `clang-demo-vfs` consumes the
+core `kandelo-sdk` package and this repository's `clang` package, but
+only lists software-repository packages in `gallery.json` because the
+gallery availability check reads this repository's release index.
 
 If the package should appear in Kandelo's browser gallery, add an entry
 to `gallery.json`. The gallery entry should list every package that must

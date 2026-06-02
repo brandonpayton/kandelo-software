@@ -1,0 +1,68 @@
+kind = "program"
+name = "clang"
+version = "21"
+kernel_abi = 13
+depends_on = ["libcxx@21"]
+
+# LLVM's release branch is fetched by the build script with a sparse checkout.
+# The all-zero sha follows the existing libcxx package convention for git
+# sources whose integrity is pinned by branch + package revision rather than a
+# tarball hash.
+[source]
+url = "https://github.com/llvm/llvm-project.git"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[license]
+spdx = "Apache-2.0 WITH LLVM-exception"
+url = "https://github.com/llvm/llvm-project/blob/main/LICENSE.TXT"
+
+[build]
+script_path = "packages/registry/clang/build-clang.sh"
+
+[[outputs]]
+name = "clang"
+wasm = "clang.wasm"
+
+[[outputs]]
+name = "clang++"
+wasm = "clang.wasm"
+
+[[outputs]]
+name = "wasm-ld"
+wasm = "wasm-ld.wasm"
+
+[[outputs]]
+name = "llvm-ar"
+wasm = "llvm-ar.wasm"
+
+[[outputs]]
+name = "llvm-ranlib"
+wasm = "llvm-ranlib.wasm"
+
+[[outputs]]
+name = "llvm-nm"
+wasm = "llvm-nm.wasm"
+
+[[host_tools]]
+name = "cmake"
+version_constraint = ">=3.20"
+probe = { args = ["--version"], version_regex = "cmake version (\\d+\\.\\d+(?:\\.\\d+)?)" }
+install_hints = { darwin = "brew install cmake", linux = "apt install cmake" }
+
+[[host_tools]]
+name = "git"
+version_constraint = ">=2.30"
+probe = { args = ["--version"], version_regex = "git version (\\d+\\.\\d+(?:\\.\\d+)?)" }
+install_hints = { darwin = "ships with Xcode Command Line Tools; or: brew install git", linux = "apt install git" }
+
+[[host_tools]]
+name = "python3"
+version_constraint = ">=3.10"
+probe = { args = ["--version"], version_regex = "Python (\\d+\\.\\d+(?:\\.\\d+)?)" }
+install_hints = { darwin = "brew install python", linux = "apt install python3" }
+
+[[host_tools]]
+name = "make"
+version_constraint = ">=3.80"
+probe = { args = ["--version"], version_regex = "GNU Make (\\d+\\.\\d+(?:\\.\\d+)?)" }
+install_hints = { darwin = "ships with macOS Command Line Tools; or: brew install make", linux = "apt install make" }

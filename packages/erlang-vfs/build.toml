@@ -1,4 +1,4 @@
-script_path = "examples/libs/erlang-vfs/build-erlang-vfs.sh"
+script_path = "packages/registry/erlang-vfs/build-erlang-vfs.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 2

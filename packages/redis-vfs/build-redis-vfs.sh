@@ -8,8 +8,8 @@ cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
   build-deps --arch wasm32 --binaries-dir "$REPO_ROOT/binaries" resolve redis
 cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
   build-deps --arch wasm32 --binaries-dir "$REPO_ROOT/binaries" resolve dinit
-bash "$REPO_ROOT/examples/browser/scripts/build-redis-vfs-image.sh"
-VFS="$REPO_ROOT/examples/browser/public/redis.vfs.zst"
+bash "$REPO_ROOT/images/vfs/scripts/build-redis-vfs-image.sh"
+VFS="$REPO_ROOT/apps/browser-demos/public/redis.vfs.zst"
 [ -f "$VFS" ] || { echo "ERROR: $VFS not produced" >&2; exit 1; }
 STAGE="$SCRIPT_DIR/redis-vfs.vfs.zst"
 cp "$VFS" "$STAGE"

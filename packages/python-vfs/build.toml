@@ -1,4 +1,4 @@
-script_path = "examples/libs/python-vfs/build-python-vfs.sh"
+script_path = "packages/registry/python-vfs/build-python-vfs.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 2

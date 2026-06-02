@@ -11,7 +11,7 @@ set -euo pipefail
 #   1. Build host miniperl + generate_uudmap (native)
 #   2. Cross-compile perl for wasm32
 #
-# Output: examples/libs/perl/bin/perl.wasm
+# Output: packages/registry/perl/bin/perl.wasm
 
 PERL_VERSION="${PERL_VERSION:-5.40.3}"
 PERL_CROSS_VERSION="${PERL_CROSS_VERSION:-1.6.4}"

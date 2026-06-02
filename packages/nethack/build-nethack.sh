@@ -18,8 +18,8 @@ set -euo pipefail
 # (headers in include/, nhdat in dat/) is kept.
 #
 # Output:
-#   examples/libs/nethack/bin/nethack.wasm
-#   examples/libs/nethack/runtime/share/nethack/nhdat   (and symbols/license)
+#   packages/registry/nethack/bin/nethack.wasm
+#   packages/registry/nethack/runtime/share/nethack/nhdat   (and symbols/license)
 
 NETHACK_VERSION="${NETHACK_VERSION:-3.6.7}"
 NETHACK_SHORT="367"  # Upstream tarballs drop the dots: "nethack-367-src.tgz"
@@ -328,7 +328,7 @@ cp "$SRC_DIR/dat/nhdat" "$RUNTIME_DIR/share/nethack/nhdat"
 # runtime/ here is enough — the resulting archive contains nethack.wasm +
 # runtime/share/nethack/* and is self-sufficient. Outside the resolver,
 # WASM_POSIX_DEP_OUT_DIR is unset and this is a no-op. Mirrors
-# examples/libs/vim/build-vim.sh.
+# packages/registry/vim/build-vim.sh.
 if [ -n "${WASM_POSIX_DEP_OUT_DIR:-}" ] && [ -d "$RUNTIME_DIR" ]; then
     rm -rf "$WASM_POSIX_DEP_OUT_DIR/runtime"
     cp -R "$RUNTIME_DIR" "$WASM_POSIX_DEP_OUT_DIR/runtime"

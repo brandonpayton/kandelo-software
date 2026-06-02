@@ -19,6 +19,14 @@ temporarily removed from browser-demo rebuilds, plus NetHack:
 | `erlang-vfs` | VFS image | Erlang/OTP runtime image |
 | `texlive` | program/runtime | `pdftex.wasm` plus TeX Live bundle |
 | `nethack` | program | NetHack `nethack.wasm` |
+| `clang` | program/toolchain | Clang, `wasm-ld`, and LLVM binutils for Kandelo |
+| `clang-demo-vfs` | VFS image | Kandelo SDK shell image with Clang staged for C/C++ editing and compilation |
+
+The Clang payload is intentionally separate from Kandelo's core SDK VFS
+image. The demo VFS starts with Kandelo's full shell environment, then
+composes the core SDK package and the `clang` package into one
+browser-bootable image; other consumers can stage the `clang` package
+outputs as lazy files or bundle them into a lazy archive.
 
 The package recipes live under `packages/<name>/`. They use Kandelo's
 current two-file package shape:
@@ -35,7 +43,7 @@ checkout can resolve these packages from this package source by putting
 the package directory first in the resolver registry path:
 
 ```bash
-export WASM_POSIX_DEPS_REGISTRY="/path/to/kandelo-software/packages:/path/to/kandelo/examples/libs"
+export WASM_POSIX_DEPS_REGISTRY="/path/to/kandelo-software/packages:/path/to/kandelo/packages/registry"
 cd /path/to/kandelo
 cargo xtask build-deps resolve nethack --arch wasm32
 ```
@@ -64,10 +72,14 @@ The maintained path is GitHub Actions:
    comma-separated subset such as `nethack,redis`.
 
 The workflow checks out Kandelo, overlays `packages/*` into
-`examples/libs/*`, builds one package at a time with
+the checkout's package registry, builds one package at a time with
 `xtask archive-stage`, and uploads each archive plus an updated
 `index.toml` to `binaries-abi-v<N>`, where `N` is read from Kandelo's
 `crates/shared/src/lib.rs`.
+
+For current Kandelo checkouts the overlay destination is
+`packages/registry/*`. The sync script also mirrors packages into
+`examples/libs/*` for compatibility with older Kandelo checkouts.
 
 The reusable workflow is `.github/workflows/reusable-publish.yml`; the
 setup logic is factored into `.github/actions/prepare-kandelo`.

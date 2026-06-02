@@ -1,7 +1,7 @@
 kind = "program"
 name = "clang-demo-vfs"
 version = "0.1.0"
-kernel_abi = 12
+kernel_abi = 13
 # The shell/tool deps mirror core's populateShellEnvironment({ eagerBinaries: true }).
 depends_on = [
   "kandelo-sdk@0.1.0",

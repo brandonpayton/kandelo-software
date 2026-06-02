@@ -1,7 +1,7 @@
 kind = "program"
 name = "clang"
 version = "21"
-kernel_abi = 12
+kernel_abi = 13
 depends_on = ["libcxx@21"]
 
 # LLVM's release branch is fetched by the build script with a sparse checkout.

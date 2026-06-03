@@ -33,7 +33,7 @@ at publish time.
 
 For packages with a `[build]` block, `kernel_abi` must match the
 Kandelo `ABI_VERSION` used by the publish workflow. The current package
-set targets ABI 11.
+set targets ABI 13.
 
 `build.toml` should use the indexed binary form:
 

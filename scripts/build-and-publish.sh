@@ -39,6 +39,7 @@ TARGET_TAG="${TARGET_TAG:-binaries-abi-v${ABI}}"
   --kandelo-root "$KANDELO_ROOT" \
   --packages "$PACKAGE_SELECTION" \
   --target-tag "$TARGET_TAG"
+PACKAGE_REGISTRY="$KANDELO_ROOT/packages/registry"
 HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
 BUILD_TIMESTAMP="$(git -C "$SOFTWARE_ROOT" log -1 --format=%aI HEAD 2>/dev/null || date -u +%FT%TZ)"
 BUILD_COMMIT="$(git -C "$SOFTWARE_ROOT" rev-parse HEAD 2>/dev/null || echo local)"
@@ -64,7 +65,7 @@ build_publish_one() {
   local version="$2"
   local revision="$3"
   local arch="$4"
-  local pkg_dir="$KANDELO_ROOT/examples/libs/$pkg"
+  local pkg_dir="$PACKAGE_REGISTRY/$pkg"
 
   local sha short suffix out_dir archive_path archive_name
   sha="$(cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
@@ -116,7 +117,7 @@ for pkg in "${ordered[@]}"; do
   [ -n "$pkg" ] || continue
   want_pkg "$pkg" || continue
 
-  pkg_dir="$KANDELO_ROOT/examples/libs/$pkg"
+  pkg_dir="$PACKAGE_REGISTRY/$pkg"
   [ -d "$pkg_dir" ] || {
     echo "build-and-publish: package missing after sync: $pkg" >&2
     exit 1

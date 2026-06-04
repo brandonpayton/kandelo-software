@@ -22,7 +22,7 @@ spdx = "LicenseRef-TeXLive-Various"
 url = "https://www.tug.org/texlive/copying.html"
 
 [build]
-script_path = "examples/libs/texlive/build-texlive.sh"
+script_path = "packages/registry/texlive/build-texlive.sh"
 
 # Two outputs: the wasm engine + the runtime distribution bundle.
 # `place_binaries_symlinks` places both under

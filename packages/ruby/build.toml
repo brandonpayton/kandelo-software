@@ -1,4 +1,4 @@
-script_path = "examples/libs/ruby/build-ruby.sh"
+script_path = "packages/registry/ruby/build-ruby.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 1

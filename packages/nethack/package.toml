@@ -13,7 +13,7 @@ spdx = "NGPL"
 url = "https://nethack.org/common/license.html"
 
 [build]
-script_path = "examples/libs/nethack/build-nethack.sh"
+script_path = "packages/registry/nethack/build-nethack.sh"
 
 [[outputs]]
 name = "nethack"

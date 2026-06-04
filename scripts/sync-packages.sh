@@ -12,8 +12,9 @@ fi
 
 SOFTWARE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KANDELO_ROOT="$(cd "$1" && pwd)"
+REGISTRY_ROOT="$KANDELO_ROOT/packages/registry"
 
-[ -d "$KANDELO_ROOT/examples/libs" ] || {
+[ -d "$REGISTRY_ROOT" ] || {
   echo "sync-packages: $KANDELO_ROOT does not look like a Kandelo checkout" >&2
   exit 2
 }
@@ -21,7 +22,7 @@ KANDELO_ROOT="$(cd "$1" && pwd)"
 for pkg_dir in "$SOFTWARE_ROOT"/packages/*; do
   [ -d "$pkg_dir" ] || continue
   pkg="$(basename "$pkg_dir")"
-  dest="$KANDELO_ROOT/examples/libs/$pkg"
+  dest="$REGISTRY_ROOT/$pkg"
   rm -rf "$dest"
   mkdir -p "$dest"
   cp -R "$pkg_dir"/. "$dest"/

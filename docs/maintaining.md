@@ -14,7 +14,7 @@ gallery.json                     # browser-gallery entries gated by index.toml
 ```
 
 The workflow overlays each package into a Kandelo checkout at
-`examples/libs/<name>/` before building. That keeps the existing build
+`packages/registry/<name>/` before building. That keeps the existing build
 scripts working without duplicating Kandelo's SDK, `xtask`, browser VFS
 builders, or release archive code in this repository.
 
@@ -50,7 +50,7 @@ publish after merge.
 `build.toml` should use the indexed binary form:
 
 ```toml
-script_path = "examples/libs/nethack/build-nethack.sh"
+script_path = "packages/registry/nethack/build-nethack.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 2

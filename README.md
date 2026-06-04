@@ -35,7 +35,7 @@ checkout can resolve these packages from this package source by putting
 the package directory first in the resolver registry path:
 
 ```bash
-export WASM_POSIX_DEPS_REGISTRY="/path/to/kandelo-software/packages:/path/to/kandelo/examples/libs"
+export WASM_POSIX_DEPS_REGISTRY="/path/to/kandelo-software/packages:/path/to/kandelo/packages/registry"
 cd /path/to/kandelo
 cargo xtask build-deps resolve nethack --arch wasm32
 ```
@@ -64,7 +64,7 @@ The maintained path is GitHub Actions:
    comma-separated subset such as `nethack,redis`.
 
 The workflow checks out Kandelo, overlays `packages/*` into
-`examples/libs/*`, builds one package at a time with
+`packages/registry/*`, builds one package at a time with
 `xtask archive-stage`, and uploads each archive plus an updated
 `index.toml` to `binaries-abi-v<N>`, where `N` is read from Kandelo's
 `crates/shared/src/lib.rs`.

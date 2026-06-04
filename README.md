@@ -89,6 +89,8 @@ When Kandelo bumps `ABI_VERSION`:
 3. Merging the `abi-bump` PR triggers **Publish after ABI bump**, which
    rebuilds all packages against the matching Kandelo release tag and
    publishes them to `binaries-abi-v<N>`.
+   The same workflow also retries the current ABI publish after merged
+   publish-pipeline fixes, or when a merged PR is labeled `abi-publish`.
 
 For a local or one-off bump, run:
 

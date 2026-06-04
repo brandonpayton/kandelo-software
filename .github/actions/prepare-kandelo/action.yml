@@ -19,6 +19,7 @@ runs:
       uses: DeterminateSystems/magic-nix-cache-action@v13
       with:
         use-gha-cache: false
+        use-flakehub: false
 
     - name: Install Erlang/OTP for Erlang package builds
       uses: erlef/setup-beam@v1
@@ -29,7 +30,12 @@ runs:
       shell: bash
       run: |
         git -C "${{ inputs.kandelo-root }}" config --global url."https://github.com/".insteadOf "git@github.com:"
-        git -C "${{ inputs.kandelo-root }}" submodule update --init --depth 1 musl
+        musl_path="$(git -C "${{ inputs.kandelo-root }}" config -f .gitmodules --get submodule.musl.path || true)"
+        if [ -z "$musl_path" ]; then
+          echo "Kandelo .gitmodules does not define submodule.musl.path" >&2
+          exit 1
+        fi
+        git -C "${{ inputs.kandelo-root }}" submodule update --init --depth 1 "$musl_path"
 
     - name: Cache Cargo and Kandelo sysroots
       uses: actions/cache@v4
@@ -39,7 +45,7 @@ runs:
           ${{ inputs.kandelo-root }}/target
           ${{ inputs.kandelo-root }}/sysroot
           ${{ inputs.kandelo-root }}/sysroot64
-        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/examples/libs/libcxx/**') }}
+        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/.gitmodules', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/libc/musl-overlay/**', 'kandelo/libc/glue/**', 'kandelo/examples/libs/libcxx/**') }}
         restore-keys: |
           kandelo-software-${{ runner.os }}-
 

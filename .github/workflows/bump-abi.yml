@@ -1,0 +1,133 @@
+name: Bump Kandelo ABI metadata
+
+on:
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: Optional ABI override. Empty means latest durable Kandelo release.
+        type: string
+        default: ""
+      kandelo-repository:
+        description: Kandelo repository to inspect for binaries-abi-v<N> releases.
+        type: string
+        default: brandonpayton/wasm-posix-kernel
+  schedule:
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kandelo-software
+        uses: actions/checkout@v4
+
+      - name: Resolve target ABI
+        id: abi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_ABI: ${{ inputs.abi || '' }}
+          KANDELO_REPOSITORY: ${{ inputs.kandelo-repository || 'brandonpayton/wasm-posix-kernel' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_ABI" ]; then
+            abi="$INPUT_ABI"
+          else
+            abi="$(bash scripts/latest-kandelo-abi.sh --repo "$KANDELO_REPOSITORY")"
+          fi
+          if ! [[ "$abi" =~ ^[0-9]+$ ]]; then
+            echo "invalid ABI: $abi" >&2
+            exit 2
+          fi
+          echo "abi=$abi" >> "$GITHUB_OUTPUT"
+          echo "release_tag=binaries-abi-v$abi" >> "$GITHUB_OUTPUT"
+          echo "kandelo_repository=$KANDELO_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "Resolved Kandelo ABI $abi from $KANDELO_REPOSITORY"
+
+      - name: Bump ABI metadata
+        id: bump
+        env:
+          ABI: ${{ steps.abi.outputs.abi }}
+        run: |
+          set -euo pipefail
+          bash scripts/bump-abi-metadata.sh --abi "$ABI"
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Package metadata already targets ABI $ABI."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+
+      - name: Validate bumped metadata
+        env:
+          ABI: ${{ steps.abi.outputs.abi }}
+          RELEASE_TAG: ${{ steps.abi.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          kandelo_stub="$(mktemp -d)"
+          mkdir -p "$kandelo_stub/crates/shared/src"
+          printf 'pub const ABI_VERSION: u32 = %s;\n' "$ABI" > "$kandelo_stub/crates/shared/src/lib.rs"
+          bash scripts/validate-abi-metadata.sh \
+            --kandelo-root "$kandelo_stub" \
+            --packages all \
+            --target-tag "$RELEASE_TAG"
+          bash scripts/test-bump-abi-metadata.sh
+
+      - name: Open or update ABI bump PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ABI: ${{ steps.abi.outputs.abi }}
+          RELEASE_TAG: ${{ steps.abi.outputs.release_tag }}
+          KANDELO_REPOSITORY: ${{ steps.abi.outputs.kandelo_repository }}
+        run: |
+          set -euo pipefail
+          branch="automation/bump-abi-$ABI"
+          title="Bump package metadata for Kandelo ABI $ABI"
+          body_file="$(mktemp)"
+
+          cat >"$body_file" <<EOF
+          ## Summary
+          - update package ABI metadata to Kandelo ABI $ABI
+          - update gallery metadata to $RELEASE_TAG
+          - keep docs in sync with the current package ABI
+
+          ## Source
+          Latest durable Kandelo release detected from \`$KANDELO_REPOSITORY\`: \`$RELEASE_TAG\`.
+
+          ## Verification
+          - \`scripts/validate-abi-metadata.sh\`
+          - \`scripts/test-bump-abi-metadata.sh\`
+
+          Merging this PR triggers the full package publish workflow for \`$RELEASE_TAG\`.
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$branch" >/dev/null 2>&1 || true
+          git checkout -B "$branch"
+          git add packages gallery.json docs/maintaining.md
+          git commit -m "Bump package metadata for Kandelo ABI $ABI"
+          git push --force-with-lease origin "$branch"
+
+          gh label create abi-bump \
+            --description "Package metadata tracks a new Kandelo ABI" \
+            --color "1f883d" >/dev/null 2>&1 || true
+
+          existing_pr="$(gh pr list --head "$branch" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing_pr" ]; then
+            gh pr edit "$existing_pr" --title "$title" --body-file "$body_file" --add-label abi-bump
+            echo "Updated PR #$existing_pr"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "$title" \
+              --body-file "$body_file" \
+              --label abi-bump
+          fi

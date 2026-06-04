@@ -1,0 +1,47 @@
+name: Publish after ABI bump
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    if: |
+      github.event.pull_request.merged == true &&
+      (
+        startsWith(github.event.pull_request.head.ref, 'automation/bump-abi-') ||
+        contains(github.event.pull_request.labels.*.name, 'abi-bump')
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+    steps:
+      - name: Checkout merged metadata
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read ABI release tag
+        id: metadata
+        run: |
+          set -euo pipefail
+          release_tag="$(jq -r '.release_tag // empty' gallery.json)"
+          if [ -z "$release_tag" ] || ! [[ "$release_tag" =~ ^binaries-abi-v[0-9]+$ ]]; then
+            echo "gallery.json release_tag must be binaries-abi-v<N>, got ${release_tag:-missing}" >&2
+            exit 2
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing package source for $release_tag"
+
+  publish:
+    needs: resolve
+    if: needs.resolve.result == 'success'
+    uses: ./.github/workflows/reusable-publish.yml
+    with:
+      kandelo-ref: ${{ needs.resolve.outputs.release_tag }}
+      packages: all
+      release-tag: ${{ needs.resolve.outputs.release_tag }}
+    secrets: inherit

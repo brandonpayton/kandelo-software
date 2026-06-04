@@ -42,6 +42,11 @@ workflow runs the same script after detecting a new durable Kandelo
 PR triggers the full package publish workflow for the matching release
 tag.
 
+If an ABI publish fails before the release is complete, merge the fix
+through a publish-pipeline path such as `.github/actions/prepare-kandelo/`
+or label the fix PR `abi-publish`; either signal retries the current ABI
+publish after merge.
+
 `build.toml` should use the indexed binary form:
 
 ```toml

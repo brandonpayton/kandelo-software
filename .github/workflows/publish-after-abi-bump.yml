@@ -6,18 +6,15 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   resolve:
-    if: |
-      github.event.pull_request.merged == true &&
-      (
-        startsWith(github.event.pull_request.head.ref, 'automation/bump-abi-') ||
-        contains(github.event.pull_request.labels.*.name, 'abi-bump')
-      )
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.metadata.outputs.release_tag }}
+      should_publish: ${{ steps.trigger.outputs.should_publish }}
     steps:
       - name: Checkout merged metadata
         uses: actions/checkout@v4
@@ -34,11 +31,52 @@ jobs:
             exit 2
           fi
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "Publishing package source for $release_tag"
+          echo "Resolved package source release tag $release_tag"
+
+      - name: Classify publish trigger
+        id: trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          LABEL_NAMES_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          should_publish=false
+          reason=""
+
+          if [[ "$HEAD_REF" == automation/bump-abi-* ]]; then
+            should_publish=true
+            reason="automation ABI bump branch"
+          elif jq -e 'index("abi-bump") or index("abi-publish")' <<<"$LABEL_NAMES_JSON" >/dev/null; then
+            should_publish=true
+            reason="ABI publish label"
+          else
+            changed_files="$(gh api --paginate \
+              "repos/$REPOSITORY/pulls/$PR_NUMBER/files" \
+              --jq '.[].filename')"
+            publish_path_pattern='^(\.github/actions/prepare-kandelo/|\.github/workflows/(publish|publish-after-abi-bump|reusable-publish)\.ya?ml$|scripts/(build-and-publish|publish-archive|sync-packages|validate-abi-metadata)\.sh$)'
+
+            if grep -Eq "$publish_path_pattern" <<<"$changed_files"; then
+              should_publish=true
+              reason="publish pipeline changed"
+              echo "Publish pipeline changes:"
+              grep -E "$publish_path_pattern" <<<"$changed_files"
+            fi
+          fi
+
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          if [ "$should_publish" = true ]; then
+            echo "Publishing after merge: $reason"
+          else
+            echo "Merged PR does not look like an ABI publish trigger."
+          fi
 
   publish:
     needs: resolve
-    if: needs.resolve.result == 'success'
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.should_publish == 'true'
     uses: ./.github/workflows/reusable-publish.yml
     with:
       kandelo-ref: ${{ needs.resolve.outputs.release_tag }}

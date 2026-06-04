@@ -498,9 +498,11 @@ SITE_EOF
 
     echo "==> Created config.site: $CONFIG_SITE"
 
-    # Ruby's wasi detection automatically selects asyncify coroutine,
-    # adds wasm/ support files, and sets up wasm-opt POSTLINK.
-    # We use --host=wasm32-unknown-wasi to trigger this.
+    # Ruby's wasi detection adds wasm/ support files and may set up a
+    # wasm-opt POSTLINK step in the generated Makefile. We use
+    # --host=wasm32-unknown-wasi to trigger the wasm build, then patch
+    # POSTLINK off below and explicitly run wasm-fork-instrument on the
+    # final ruby.wasm.
     # WASI_SDK_PATH must be set (Ruby errors if missing) but we override
     # CC/AR/RANLIB/NM so it's only used for the existence check.
     CONFIG_SITE="$CONFIG_SITE" \
@@ -537,6 +539,11 @@ SITE_EOF
         2>&1 | tail -50
 
     echo "==> Configure complete."
+
+    if [ -f Makefile ]; then
+        echo "==> Disabling Ruby generated POSTLINK (wasm-fork-instrument runs explicitly after make)..."
+        perl -0pi -e 's/^POSTLINK\s*=.*$/POSTLINK = :/mg' Makefile
+    fi
 
     # Patch config.h: disable HAVE_* that slipped through link-based detection
     echo "==> Patching config.h..."
@@ -699,6 +706,11 @@ elif [ -f miniruby ]; then
     echo "==> Only miniruby built successfully (no full extension support)"
     cp miniruby "$BIN_DIR/ruby.wasm"
 fi
+
+FORK_INSTRUMENT="$REPO_ROOT/scripts/run-wasm-fork-instrument.sh"
+echo "==> Applying wasm-fork-instrument to ruby.wasm..."
+"$FORK_INSTRUMENT" "$BIN_DIR/ruby.wasm" -o "$BIN_DIR/ruby.wasm.instr"
+mv "$BIN_DIR/ruby.wasm.instr" "$BIN_DIR/ruby.wasm"
 
 # Install stdlib
 echo "==> Installing Ruby stdlib..."

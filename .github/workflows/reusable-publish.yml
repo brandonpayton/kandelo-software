@@ -41,6 +41,21 @@ jobs:
           path: kandelo
           submodules: false
 
+      - name: Validate ABI metadata
+        env:
+          PACKAGE_SELECTION: ${{ inputs.packages }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          args=(
+            --software-root "$GITHUB_WORKSPACE/kandelo-software"
+            --kandelo-root "$GITHUB_WORKSPACE/kandelo"
+            --packages "$PACKAGE_SELECTION"
+          )
+          if [ -n "$RELEASE_TAG" ]; then
+            args+=(--target-tag "$RELEASE_TAG")
+          fi
+          bash "$GITHUB_WORKSPACE/kandelo-software/scripts/validate-abi-metadata.sh" "${args[@]}"
+
       - name: Prepare Kandelo
         uses: ./kandelo-software/.github/actions/prepare-kandelo
         with:

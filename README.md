@@ -81,10 +81,20 @@ in the index.
 
 When Kandelo bumps `ABI_VERSION`:
 
-1. Update each publishable `package.toml` to `kernel_abi = <new ABI>`.
-2. Run the publish workflow against the Kandelo ref that contains the
-   ABI bump.
-3. Verify the release has a new `binaries-abi-v<N>/index.toml`.
+1. The **Bump Kandelo ABI metadata** workflow detects the latest durable
+   Kandelo `binaries-abi-v<N>` release and opens an `abi-bump` PR when
+   this repository still targets an older ABI.
+2. That workflow runs `scripts/bump-abi-metadata.sh --abi <N>` to update
+   every publishable `package.toml`, `gallery.json`, and ABI docs.
+3. Merging the `abi-bump` PR triggers **Publish after ABI bump**, which
+   rebuilds all packages against the matching Kandelo release tag and
+   publishes them to `binaries-abi-v<N>`.
+
+For a local or one-off bump, run:
+
+```bash
+bash scripts/bump-abi-metadata.sh --abi <N>
+```
 
 Do not hardcode the ABI in `build.toml`; its `index_url` must keep the
 `{abi}` placeholder.

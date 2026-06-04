@@ -33,7 +33,14 @@ at publish time.
 
 For packages with a `[build]` block, `kernel_abi` must match the
 Kandelo `ABI_VERSION` used by the publish workflow. The current package
-set targets ABI 11.
+set targets ABI 13.
+
+Use `scripts/bump-abi-metadata.sh --abi <N>` to update the package set
+for a new Kandelo ABI. The scheduled **Bump Kandelo ABI metadata**
+workflow runs the same script after detecting a new durable Kandelo
+`binaries-abi-v<N>` release, then opens an `abi-bump` PR. Merging that
+PR triggers the full package publish workflow for the matching release
+tag.
 
 `build.toml` should use the indexed binary form:
 

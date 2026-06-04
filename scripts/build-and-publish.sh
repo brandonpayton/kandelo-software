@@ -28,8 +28,17 @@ fi
 cd "$KANDELO_ROOT"
 source "$KANDELO_ROOT/sdk/activate.sh"
 
-ABI="$(grep -oE 'ABI_VERSION: u32 = [0-9]+' crates/shared/src/lib.rs | awk '{print $4}')"
+ABI="$(grep -oE 'ABI_VERSION: u32 = [0-9]+' crates/shared/src/lib.rs | awk '{print $4}' || true)"
+[ -n "$ABI" ] || {
+  echo "build-and-publish: could not read Kandelo ABI_VERSION" >&2
+  exit 2
+}
 TARGET_TAG="${TARGET_TAG:-binaries-abi-v${ABI}}"
+"$SOFTWARE_ROOT/scripts/validate-abi-metadata.sh" \
+  --software-root "$SOFTWARE_ROOT" \
+  --kandelo-root "$KANDELO_ROOT" \
+  --packages "$PACKAGE_SELECTION" \
+  --target-tag "$TARGET_TAG"
 HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
 BUILD_TIMESTAMP="$(git -C "$SOFTWARE_ROOT" log -1 --format=%aI HEAD 2>/dev/null || date -u +%FT%TZ)"
 BUILD_COMMIT="$(git -C "$SOFTWARE_ROOT" rev-parse HEAD 2>/dev/null || echo local)"

@@ -1,4 +1,4 @@
-script_path = "examples/libs/redis/build-redis.sh"
+script_path = "packages/registry/redis/build-redis.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 1

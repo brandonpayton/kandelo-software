@@ -79,6 +79,11 @@ read_gallery_tag() {
   fi
 }
 
+read_script_paths() {
+  local file="$1"
+  sed -nE 's/^[[:space:]]*script_path[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$file"
+}
+
 mapfile -t ordered <"$SOFTWARE_ROOT/packages.txt"
 
 mismatch=0
@@ -101,6 +106,36 @@ for pkg in "${ordered[@]}"; do
   if [ "$package_abi" != "$ABI" ]; then
     echo "validate-abi-metadata: $pkg/package.toml has kernel_abi=${package_abi:-missing}; expected $ABI" >&2
     mismatch=1
+  fi
+
+  build_script="$pkg_dir/build-$pkg.sh"
+  expected_script_path="packages/registry/$pkg/build-$pkg.sh"
+  if [ ! -f "$build_script" ]; then
+    echo "validate-abi-metadata: build script missing: $build_script" >&2
+    mismatch=1
+  fi
+
+  script_paths="$(read_script_paths "$pkg_dir/package.toml")"
+  if [ -z "$script_paths" ]; then
+    echo "validate-abi-metadata: $pkg/package.toml is missing script_path=$expected_script_path" >&2
+    mismatch=1
+  elif grep -Fvx "$expected_script_path" <<<"$script_paths" >/dev/null; then
+    echo "validate-abi-metadata: $pkg/package.toml has stale script_path; expected $expected_script_path" >&2
+    mismatch=1
+  fi
+
+  if [ ! -f "$pkg_dir/build.toml" ]; then
+    echo "validate-abi-metadata: build metadata missing: $pkg_dir/build.toml" >&2
+    mismatch=1
+  else
+    build_script_paths="$(read_script_paths "$pkg_dir/build.toml")"
+    if [ -z "$build_script_paths" ]; then
+      echo "validate-abi-metadata: $pkg/build.toml is missing script_path=$expected_script_path" >&2
+      mismatch=1
+    elif grep -Fvx "$expected_script_path" <<<"$build_script_paths" >/dev/null; then
+      echo "validate-abi-metadata: $pkg/build.toml has stale script_path; expected $expected_script_path" >&2
+      mismatch=1
+    fi
   fi
 done
 

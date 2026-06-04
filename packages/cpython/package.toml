@@ -13,7 +13,7 @@ spdx = "Python-2.0"
 url = "https://docs.python.org/3/license.html"
 
 [build]
-script_path = "examples/libs/cpython/build-cpython.sh"
+script_path = "packages/registry/cpython/build-cpython.sh"
 
 [[outputs]]
 name = "cpython"

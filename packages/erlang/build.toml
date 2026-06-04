@@ -1,4 +1,4 @@
-script_path = "examples/libs/erlang/build-erlang.sh"
+script_path = "packages/registry/erlang/build-erlang.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 2

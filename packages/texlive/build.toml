@@ -1,4 +1,4 @@
-script_path = "examples/libs/texlive/build-texlive.sh"
+script_path = "packages/registry/texlive/build-texlive.sh"
 repo_url    = "https://github.com/brandonpayton/kandelo-software.git"
 commit      = "UNPUBLISHED"
 revision    = 2

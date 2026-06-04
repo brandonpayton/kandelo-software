@@ -13,7 +13,7 @@ spdx = "Ruby OR BSD-2-Clause"
 url = "https://github.com/ruby/ruby/blob/master/COPYING"
 
 [build]
-script_path = "examples/libs/ruby/build-ruby.sh"
+script_path = "packages/registry/ruby/build-ruby.sh"
 
 [[outputs]]
 name = "ruby"

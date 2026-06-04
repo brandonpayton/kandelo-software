@@ -285,7 +285,7 @@ echo "==> pdftex.wasm: $(du -h "$BIN_DIR/pdftex.wasm" | cut -f1)"
 BUNDLE_FILE="$BIN_DIR/texlive-bundle.json"
 echo "==> Building TeX Live distribution bundle..."
 TEXLIVE_BUNDLE_OUT="$BUNDLE_FILE" \
-    bash "$REPO_ROOT/examples/browser/scripts/build-texlive-bundle.sh"
+    bash "$REPO_ROOT/images/vfs/scripts/build-texlive-bundle.sh"
 echo "==> texlive-bundle.json: $(du -h "$BUNDLE_FILE" | cut -f1)"
 
 echo "==> Done."

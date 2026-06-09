@@ -172,6 +172,11 @@ if [ ! -x "$HOST_BUILD_DIR/texk/web2c/pdftex" ]; then
         --disable-all-pkgs \
         --enable-web2c \
         --enable-pdftex \
+        --disable-pdftex-synctex \
+        --disable-tex \
+        --disable-etex \
+        --disable-ptex \
+        --disable-uptex \
         --disable-luatex \
         --disable-luajittex \
         --disable-luahbtex \
@@ -180,9 +185,16 @@ if [ ! -x "$HOST_BUILD_DIR/texk/web2c/pdftex" ]; then
         --disable-aleph \
         --disable-euptex \
         --disable-hitex \
+        --disable-mf \
+        --disable-mf-nowin \
         --disable-mp \
+        --disable-pmp \
+        --disable-upmp \
         --disable-mflua \
+        --disable-mflua-nowin \
         --disable-mfluajit \
+        --disable-mfluajit-nowin \
+        --disable-texprof \
         --disable-synctex \
         --without-x \
         --disable-shared \
@@ -287,7 +299,12 @@ SITE
         --disable-all-pkgs \
         --enable-web2c \
         --enable-pdftex \
+        --disable-pdftex-synctex \
         --disable-native-texlive-build \
+        --disable-tex \
+        --disable-etex \
+        --disable-ptex \
+        --disable-uptex \
         --disable-luatex \
         --disable-luajittex \
         --disable-luahbtex \
@@ -295,11 +312,18 @@ SITE
         --disable-aleph \
         --disable-euptex \
         --disable-hitex \
+        --disable-mf \
+        --disable-mf-nowin \
         --disable-mp \
+        --disable-pmp \
+        --disable-upmp \
         --disable-mflua \
+        --disable-mflua-nowin \
         --disable-mfluajit \
+        --disable-mfluajit-nowin \
         --disable-xetex \
         --disable-omfonts \
+        --disable-texprof \
         --disable-synctex \
         --without-x \
         --disable-shared \

@@ -34,7 +34,7 @@ at publish time.
 
 For packages with a `[build]` block, `kernel_abi` must match the
 Kandelo `ABI_VERSION` used by the publish workflow. The current package
-set targets ABI 13.
+set targets ABI 14.
 
 Use `scripts/bump-abi-metadata.sh --abi <N>` to update the package set
 for a new Kandelo ABI. The scheduled **Bump Kandelo ABI metadata**

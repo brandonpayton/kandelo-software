@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "brandonpayton/kandelo-software",
-  "release_tag": "binaries-abi-v13",
+  "release_tag": "binaries-abi-v14",
   "index_url": "index.toml",
   "entries": [
     {

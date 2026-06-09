@@ -40,7 +40,7 @@ TARGET_TAG="${TARGET_TAG:-binaries-abi-v${ABI}}"
   --packages "$PACKAGE_SELECTION" \
   --target-tag "$TARGET_TAG"
 PACKAGE_REGISTRY="$KANDELO_ROOT/packages/registry"
-HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
+HOST_TARGET=""
 BUILD_TIMESTAMP="$(git -C "$SOFTWARE_ROOT" log -1 --format=%aI HEAD 2>/dev/null || date -u +%FT%TZ)"
 BUILD_COMMIT="$(git -C "$SOFTWARE_ROOT" rev-parse HEAD 2>/dev/null || echo local)"
 BUILD_HOST="${REPOSITORY}@${BUILD_COMMIT}"
@@ -60,6 +60,58 @@ want_pkg() {
   [[ " $normalized " == *" $pkg "* ]]
 }
 
+selection_is_all() {
+  [ "$PACKAGE_SELECTION" = "all" ] || [ -z "$PACKAGE_SELECTION" ]
+}
+
+publish_policy_field() {
+  local pkg="$1"
+  local field="$2"
+  local file="$SOFTWARE_ROOT/packages/$pkg/publish.toml"
+  local in_publish=0
+  local line
+
+  [ -f "$file" ] || return 0
+  while IFS= read -r line; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] || continue
+
+    if [[ "$line" =~ ^\[[^]]+\]$ ]]; then
+      if [ "$line" = "[publish]" ]; then
+        in_publish=1
+      else
+        in_publish=0
+      fi
+      continue
+    fi
+
+    if [ "$in_publish" -eq 1 ] && [[ "$line" =~ ^$field[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+    if [ "$in_publish" -eq 1 ] && [[ "$line" =~ ^$field[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$ ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done < "$file"
+}
+
+publish_enabled() {
+  local pkg="$1"
+  local enabled
+  enabled="$(publish_policy_field "$pkg" enabled || true)"
+  [ "$enabled" != "false" ]
+}
+
+host_target() {
+  if [ -z "$HOST_TARGET" ]; then
+    HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
+  fi
+  printf '%s\n' "$HOST_TARGET"
+}
+
 build_publish_one() {
   local pkg="$1"
   local version="$2"
@@ -67,8 +119,9 @@ build_publish_one() {
   local arch="$4"
   local pkg_dir="$PACKAGE_REGISTRY/$pkg"
 
-  local sha short suffix out_dir archive_path archive_name
-  sha="$(cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
+  local cargo_target sha short suffix out_dir archive_path archive_name
+  cargo_target="$(host_target)"
+  sha="$(cargo run --release -p xtask --target "$cargo_target" --quiet -- \
     compute-cache-key-sha --package "$pkg_dir" --arch "$arch")"
   short="${sha:0:8}"
   suffix="-abi${ABI}-${arch}-${short}.tar.zst"
@@ -84,7 +137,7 @@ build_publish_one() {
   mkdir -p "$out_dir"
 
   echo "build-and-publish: staging $pkg $version rev$revision $arch"
-  cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
+  cargo run --release -p xtask --target "$cargo_target" --quiet -- \
     archive-stage \
       --package "$pkg_dir" \
       --arch "$arch" \
@@ -116,6 +169,18 @@ mapfile -t ordered <"$SOFTWARE_ROOT/packages.txt"
 for pkg in "${ordered[@]}"; do
   [ -n "$pkg" ] || continue
   want_pkg "$pkg" || continue
+
+  if ! publish_enabled "$pkg"; then
+    reason="$(publish_policy_field "$pkg" reason || true)"
+    reason="${reason:-not publishable by policy}"
+    if selection_is_all; then
+      echo "build-and-publish: skip $pkg (publish disabled: $reason)"
+      continue
+    fi
+    echo "build-and-publish: $pkg is disabled for publishing: $reason" >&2
+    FAILED+=("$pkg/disabled")
+    continue
+  fi
 
   pkg_dir="$PACKAGE_REGISTRY/$pkg"
   [ -d "$pkg_dir" ] || {

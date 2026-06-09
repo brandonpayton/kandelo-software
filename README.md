@@ -12,7 +12,7 @@ temporarily removed from browser-demo rebuilds, plus NetHack:
 | `python-vfs` | VFS image | CPython standard library image |
 | `perl` | program | Perl `perl.wasm` |
 | `perl-vfs` | VFS image | Perl standard library image |
-| `ruby` | program | Ruby `ruby.wasm` |
+| `ruby` | program | Not currently published; upstream Ruby 3.3's wasm runtime still depends on Asyncify for setjmp/fiber support |
 | `redis` | program | `redis-server.wasm` and `redis-cli.wasm` |
 | `redis-vfs` | VFS image | Redis server boot image |
 | `erlang` | program/runtime | BEAM plus trimmed OTP runtime bundle |
@@ -66,11 +66,18 @@ The maintained path is GitHub Actions:
 The workflow checks out Kandelo, overlays `packages/*` into
 `packages/registry/*`, builds one package at a time with
 `xtask archive-stage`, and uploads each archive plus an updated
-`index.toml` to `binaries-abi-v<N>`, where `N` is read from Kandelo's
-`crates/shared/src/lib.rs`.
+`index.toml` to `binaries-abi-v<N>`. With an empty `kandelo-ref`, the
+workflow uses `gallery.json`'s `release_tag`; pass an explicit
+`kandelo-ref` such as `main` only when publishing against that ref's
+current ABI is intended.
 
 The reusable workflow is `.github/workflows/reusable-publish.yml`; the
 setup logic is factored into `.github/actions/prepare-kandelo`.
+
+Packages with `packages/<name>/publish.toml` and
+`[publish].enabled = false` are skipped by `packages = all` publishes.
+Explicitly selecting one of those packages fails with the recorded
+reason instead of silently producing an incomplete archive.
 
 The release also carries `gallery.json`. Kandelo's browser gallery reads
 that manifest and the same release `index.toml`; entries are shown only
@@ -81,9 +88,11 @@ in the index.
 
 When Kandelo bumps `ABI_VERSION`:
 
-1. The **Bump Kandelo ABI metadata** workflow detects the latest durable
-   Kandelo `binaries-abi-v<N>` release and opens an `abi-bump` PR when
-   this repository still targets an older ABI.
+1. The **Bump Kandelo ABI metadata** workflow can be triggered by
+   `repository_dispatch` (`kandelo-abi-release` or `kandelo-abi-bump`)
+   from Kandelo, and also runs on a daily schedule. It detects the
+   latest durable Kandelo `binaries-abi-v<N>` release and opens an
+   `abi-bump` PR when this repository still targets an older ABI.
 2. That workflow runs `scripts/bump-abi-metadata.sh --abi <N>` to update
    every publishable `package.toml`, `gallery.json`, and ABI docs.
 3. Merging the `abi-bump` PR triggers **Publish after ABI bump**, which
@@ -100,3 +109,17 @@ bash scripts/bump-abi-metadata.sh --abi <N>
 
 Do not hardcode the ABI in `build.toml`; its `index_url` must keep the
 `{abi}` placeholder.
+
+Kandelo can trigger the bump workflow directly after publishing a new
+durable ABI release with a repository dispatch payload like:
+
+```json
+{
+  "event_type": "kandelo-abi-release",
+  "client_payload": {
+    "abi": 14,
+    "release_tag": "binaries-abi-v14",
+    "kandelo_repository": "brandonpayton/wasm-posix-kernel"
+  }
+}
+```

@@ -1,6 +1,8 @@
 name: Bump Kandelo ABI metadata
 
 on:
+  repository_dispatch:
+    types: [kandelo-abi-release, kandelo-abi-bump]
   workflow_dispatch:
     inputs:
       abi:
@@ -32,12 +34,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_ABI: ${{ inputs.abi || '' }}
           KANDELO_REPOSITORY: ${{ inputs.kandelo-repository || 'brandonpayton/wasm-posix-kernel' }}
+          DISPATCH_ABI: ${{ github.event.client_payload.abi || '' }}
+          DISPATCH_RELEASE_TAG: ${{ github.event.client_payload.release_tag || '' }}
+          DISPATCH_KANDELO_REPOSITORY: ${{ github.event.client_payload.kandelo_repository || github.event.client_payload.repository || '' }}
         run: |
           set -euo pipefail
+          repository="$KANDELO_REPOSITORY"
+          if [ -n "$DISPATCH_KANDELO_REPOSITORY" ]; then
+            repository="$DISPATCH_KANDELO_REPOSITORY"
+          fi
+
           if [ -n "$INPUT_ABI" ]; then
             abi="$INPUT_ABI"
+          elif [ -n "$DISPATCH_ABI" ]; then
+            abi="$DISPATCH_ABI"
+          elif [[ "$DISPATCH_RELEASE_TAG" =~ ^binaries-abi-v([0-9]+)$ ]]; then
+            abi="${BASH_REMATCH[1]}"
           else
-            abi="$(bash scripts/latest-kandelo-abi.sh --repo "$KANDELO_REPOSITORY")"
+            abi="$(bash scripts/latest-kandelo-abi.sh --repo "$repository")"
           fi
           if ! [[ "$abi" =~ ^[0-9]+$ ]]; then
             echo "invalid ABI: $abi" >&2
@@ -45,8 +59,8 @@ jobs:
           fi
           echo "abi=$abi" >> "$GITHUB_OUTPUT"
           echo "release_tag=binaries-abi-v$abi" >> "$GITHUB_OUTPUT"
-          echo "kandelo_repository=$KANDELO_REPOSITORY" >> "$GITHUB_OUTPUT"
-          echo "Resolved Kandelo ABI $abi from $KANDELO_REPOSITORY"
+          echo "kandelo_repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "Resolved Kandelo ABI $abi from $repository"
 
       - name: Bump ABI metadata
         id: bump
@@ -77,6 +91,8 @@ jobs:
             --packages all \
             --target-tag "$RELEASE_TAG"
           bash scripts/test-bump-abi-metadata.sh
+          bash scripts/test-publish-inputs.sh
+          bash scripts/test-publish-policy.sh
 
       - name: Open or update ABI bump PR
         if: steps.bump.outputs.changed == 'true'
@@ -103,17 +119,22 @@ jobs:
           ## Verification
           - \`scripts/validate-abi-metadata.sh\`
           - \`scripts/test-bump-abi-metadata.sh\`
+          - \`scripts/test-publish-inputs.sh\`
+          - \`scripts/test-publish-policy.sh\`
 
           Merging this PR triggers the full package publish workflow for \`$RELEASE_TAG\`.
           EOF
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$branch" >/dev/null 2>&1 || true
           git checkout -B "$branch"
           git add packages gallery.json docs/maintaining.md
           git commit -m "Bump package metadata for Kandelo ABI $ABI"
-          git push --force-with-lease origin "$branch"
+          if remote_sha="$(git ls-remote --heads origin "$branch" | awk '{print $1}')" && [ -n "$remote_sha" ]; then
+            git push --force-with-lease="refs/heads/$branch:$remote_sha" origin "$branch"
+          else
+            git push origin "$branch"
+          fi
 
           gh label create abi-bump \
             --description "Package metadata tracks a new Kandelo ABI" \

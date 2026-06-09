@@ -16,9 +16,9 @@ stage_libcxx() {
   libcxx_prefix="$(cargo run --release -p xtask --target "$HOST_TARGET" --quiet -- \
     build-deps --arch wasm32 path libcxx)"
 
+  mkdir -p "$SYSROOT/lib" "$SYSROOT/include/c++"
   ln -sf "$libcxx_prefix/lib/libc++.a" "$SYSROOT/lib/libc++.a"
   ln -sf "$libcxx_prefix/lib/libc++abi.a" "$SYSROOT/lib/libc++abi.a"
-  mkdir -p "$SYSROOT/include/c++"
   rm -rf "$SYSROOT/include/c++/v1"
   ln -sfn "$libcxx_prefix/include/c++/v1" "$SYSROOT/include/c++/v1"
 }

@@ -42,10 +42,11 @@ runs:
       with:
         path: |
           ~/.cargo/registry
+          ~/.cache/kandelo/libs
           ${{ inputs.kandelo-root }}/target
           ${{ inputs.kandelo-root }}/sysroot
           ${{ inputs.kandelo-root }}/sysroot64
-        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/.gitmodules', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/libc/musl-overlay/**', 'kandelo/libc/glue/**', 'kandelo/packages/registry/libcxx/**') }}
+        key: kandelo-software-${{ runner.os }}-${{ hashFiles('kandelo/Cargo.lock', 'kandelo/.gitmodules', 'kandelo/scripts/build-musl.sh', 'kandelo/musl-overlay/**', 'kandelo/glue/**', 'kandelo/libc/musl-overlay/**', 'kandelo/libc/glue/**', 'kandelo/packages/registry/libcxx/**', 'kandelo-software/scripts/stage-kandelo-libcxx.sh') }}
         restore-keys: |
           kandelo-software-${{ runner.os }}-
 
@@ -61,6 +62,14 @@ runs:
         bash scripts/dev-shell.sh true
         bash scripts/dev-shell.sh bash scripts/build-musl.sh
         bash scripts/dev-shell.sh bash scripts/build-musl.sh --arch wasm64posix
+
+    - name: Stage libc++ in Kandelo sysroot
+      shell: bash
+      run: |
+        cd "${{ inputs.kandelo-root }}"
+        bash scripts/dev-shell.sh bash "${{ inputs.software-root }}/scripts/stage-kandelo-libcxx.sh" \
+          --kandelo-root "${{ inputs.kandelo-root }}" \
+          --arches wasm32
 
     - name: Install JavaScript build prerequisites
       shell: bash

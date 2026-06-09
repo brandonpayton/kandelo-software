@@ -1,0 +1,3 @@
+[publish]
+enabled = false
+reason = "Ruby 3.3's upstream wasm runtime still imports Asyncify for setjmp/fiber support; Kandelo rejects legacy Asyncify artifacts."

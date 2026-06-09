@@ -9,6 +9,7 @@ of package recipes and the release index for the archives it publishes.
 ```text
 packages/<name>/package.toml     # portable recipe
 packages/<name>/build.toml       # this repo's publish/index settings
+packages/<name>/publish.toml     # optional this-repo publish policy
 packages/<name>/build-<name>.sh  # Kandelo-relative build script
 gallery.json                     # browser-gallery entries gated by index.toml
 ```
@@ -61,6 +62,19 @@ index_url = "https://github.com/brandonpayton/kandelo-software/releases/download
 
 Keep `{abi}` in the URL. The resolver substitutes the Kandelo ABI at
 resolve time.
+
+If a package is tracked here but must not be published under the current
+artifact policy, add `packages/<name>/publish.toml`:
+
+```toml
+[publish]
+enabled = false
+reason = "Why packages=all should skip this package."
+```
+
+`packages = all` skips disabled packages and logs the reason. Explicitly
+requesting the package fails so maintainers do not accidentally treat a
+known-unpublishable package as complete.
 
 ## Publishing Locally
 

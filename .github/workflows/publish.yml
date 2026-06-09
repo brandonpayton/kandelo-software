@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       kandelo-ref:
-        description: Kandelo git ref to build against.
+        description: Kandelo git ref to build against. Empty uses gallery.json release_tag.
         type: string
-        default: main
+        default: ""
       packages:
         description: "Package list: all, or comma-separated names."
         type: string
@@ -22,9 +22,32 @@ permissions:
   contents: write
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      kandelo_ref: ${{ steps.inputs.outputs.kandelo_ref }}
+      packages: ${{ steps.inputs.outputs.packages }}
+      release_tag: ${{ steps.inputs.outputs.release_tag }}
+    steps:
+      - name: Checkout kandelo-software
+        uses: actions/checkout@v4
+
+      - name: Resolve publish inputs
+        id: inputs
+        env:
+          INPUT_KANDELO_REF: ${{ inputs.kandelo-ref || '' }}
+          INPUT_PACKAGES: ${{ inputs.packages || 'all' }}
+          INPUT_RELEASE_TAG: ${{ inputs.release-tag || '' }}
+        run: |
+          bash scripts/resolve-publish-inputs.sh \
+            --kandelo-ref "$INPUT_KANDELO_REF" \
+            --packages "$INPUT_PACKAGES" \
+            --release-tag "$INPUT_RELEASE_TAG"
+
   publish:
+    needs: resolve
     uses: ./.github/workflows/reusable-publish.yml
     with:
-      kandelo-ref: ${{ inputs.kandelo-ref || 'main' }}
-      packages: ${{ inputs.packages || 'all' }}
-      release-tag: ${{ inputs.release-tag || '' }}
+      kandelo-ref: ${{ needs.resolve.outputs.kandelo_ref }}
+      packages: ${{ needs.resolve.outputs.packages }}
+      release-tag: ${{ needs.resolve.outputs.release_tag }}

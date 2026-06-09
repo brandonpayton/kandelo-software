@@ -61,6 +61,38 @@ prepare_cross_configures() {
     disable_configures_except "$SRC_DIR/utils"
 }
 
+write_cross_pkg_config() {
+    local pc_dir="$CROSS_BUILD_DIR/pkgconfig"
+    mkdir -p "$pc_dir"
+
+    cat > "$pc_dir/zlib.pc" << PC
+prefix=$ZLIB_PREFIX
+includedir=\${prefix}/include
+libdir=\${prefix}/lib
+
+Name: zlib
+Description: zlib compression library
+Version: 1.3.1
+Libs: -L\${libdir} -lz
+Cflags: -I\${includedir}
+PC
+
+    cat > "$pc_dir/libpng.pc" << PC
+prefix=$LIBPNG_PREFIX
+includedir=\${prefix}/include
+libdir=\${prefix}/lib
+
+Name: libpng
+Description: PNG image library
+Version: 1.6.43
+Requires.private: zlib
+Libs: -L\${libdir} $LIBPNG_LIBFLAG
+Cflags: -I\${includedir}
+PC
+
+    export PKG_CONFIG_PATH="$pc_dir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+}
+
 # --- Resolve zlib + libpng via the dep cache ---
 HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
 resolve_dep() {
@@ -85,6 +117,10 @@ fi
 if [ ! -f "$LIBPNG_PREFIX/lib/libpng.a" ] && [ ! -f "$LIBPNG_PREFIX/lib/libpng16.a" ]; then
     echo "ERROR: libpng resolve returned '$LIBPNG_PREFIX' but libpng[16].a missing" >&2
     exit 1
+fi
+LIBPNG_LIBFLAG="-lpng"
+if [ ! -f "$LIBPNG_PREFIX/lib/libpng.a" ] && [ -f "$LIBPNG_PREFIX/lib/libpng16.a" ]; then
+    LIBPNG_LIBFLAG="-lpng16"
 fi
 echo "==> zlib at $ZLIB_PREFIX"
 echo "==> libpng at $LIBPNG_PREFIX"
@@ -244,6 +280,7 @@ SITE
     # a different mechanism — TeX Live doesn't read it, so setting it
     # here had no effect on the recurse.)
     prepare_cross_configures
+    write_cross_pkg_config
     "$SRC_DIR/configure" \
         --host=wasm32-unknown-none \
         --build="$(cc -dumpmachine)" \
@@ -268,6 +305,8 @@ SITE
         --disable-shared \
         --enable-static \
         --with-system-zlib \
+        --with-zlib-includes="$ZLIB_PREFIX/include" \
+        --with-zlib-libdir="$ZLIB_PREFIX/lib" \
         --with-system-libpng \
         CC=wasm32posix-cc \
         CXX=wasm32posix-c++ \
@@ -283,7 +322,7 @@ SITE
         ZLIB_CFLAGS="-I$ZLIB_PREFIX/include" \
         ZLIB_LIBS="-L$ZLIB_PREFIX/lib -lz" \
         LIBPNG_CFLAGS="-I$LIBPNG_PREFIX/include" \
-        LIBPNG_LIBS="-L$LIBPNG_PREFIX/lib -lpng -lz"
+        LIBPNG_LIBS="-L$LIBPNG_PREFIX/lib $LIBPNG_LIBFLAG -L$ZLIB_PREFIX/lib -lz"
 
     # TeX Live subdirs are configured at make time. The cross configure
     # pruning above keeps CONF_SUBDIRS limited to the source trees that

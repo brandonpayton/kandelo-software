@@ -25,6 +25,42 @@ if ! command -v wasm32posix-cc &>/dev/null; then
     exit 1
 fi
 
+restore_texlive_configures() {
+    local parent
+    for parent in "$SRC_DIR/libs" "$SRC_DIR/texk" "$SRC_DIR/utils"; do
+        [ -d "$parent" ] || continue
+        find "$parent" -mindepth 2 -maxdepth 2 -name configure -exec chmod +x {} +
+    done
+}
+
+disable_configures_except() {
+    local parent="$1"
+    shift
+    local keep=" $* "
+    local configure subdir
+
+    [ -d "$parent" ] || return 0
+    while IFS= read -r configure; do
+        subdir="$(basename "$(dirname "$configure")")"
+        case "$keep" in
+            *" $subdir "*) chmod +x "$configure" ;;
+            *) chmod -x "$configure" ;;
+        esac
+    done < <(find "$parent" -mindepth 2 -maxdepth 2 -name configure -print)
+}
+
+prepare_cross_configures() {
+    # TeX Live's recurse.am configures every executable CONF_SUBDIRS entry,
+    # even disabled packages, appending only --disable-build. For the wasm
+    # cross build we only need pdftex's direct subtrees; hiding the rest keeps
+    # disabled utility configures from hanging or probing irrelevant deps.
+    echo "==> Restricting TeX Live cross-configure recursion..."
+    restore_texlive_configures
+    disable_configures_except "$SRC_DIR/libs" xpdf
+    disable_configures_except "$SRC_DIR/texk" kpathsea ptexenc web2c
+    disable_configures_except "$SRC_DIR/utils"
+}
+
 # --- Resolve zlib + libpng via the dep cache ---
 HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
 resolve_dep() {
@@ -74,6 +110,8 @@ if [ ! -d "$SRC_DIR" ]; then
     tar xf "$TARBALL_PATH" -C "$SRC_DIR" --strip-components=1
     rm "$TARBALL_PATH"
 fi
+
+restore_texlive_configures
 
 # TeX Live always runs luajit's sub-configure even when all Lua engines are
 # disabled. On macOS/ARM the luajit configure fails (can't find pow(), pointer
@@ -205,13 +243,24 @@ SITE
     # through the wrapped `cc` instead. (Autoconf-2.70 CC_FOR_BUILD is
     # a different mechanism — TeX Live doesn't read it, so setting it
     # here had no effect on the recurse.)
+    prepare_cross_configures
     "$SRC_DIR/configure" \
         --host=wasm32-unknown-none \
         --build="$(cc -dumpmachine)" \
         --disable-all-pkgs \
+        --enable-web2c \
         --enable-pdftex \
         --disable-native-texlive-build \
+        --disable-luatex \
+        --disable-luajittex \
+        --disable-luahbtex \
+        --disable-luajithbtex \
         --disable-aleph \
+        --disable-euptex \
+        --disable-hitex \
+        --disable-mp \
+        --disable-mflua \
+        --disable-mfluajit \
         --disable-xetex \
         --disable-omfonts \
         --disable-synctex \
@@ -236,13 +285,10 @@ SITE
         LIBPNG_CFLAGS="-I$LIBPNG_PREFIX/include" \
         LIBPNG_LIBS="-L$LIBPNG_PREFIX/lib -lpng -lz"
 
-    # --disable-all-pkgs leaves MAKE_SUBDIRS empty everywhere, but
-    # CONF_SUBDIRS still lists all subdirectories. Running top-level
-    # make triggers deferred configures for:
-    #   - texk/kpathsea, texk/ptexenc (top-level CONF_SUBDIRS)
-    #   - libs/xpdf, libs/zlib, etc. (libs/ CONF_SUBDIRS)
-    #   - texk/web2c, etc. (texk/ CONF_SUBDIRS)
-    # Without this, kpathsea and xpdf directories don't exist.
+    # TeX Live subdirs are configured at make time. The cross configure
+    # pruning above keeps CONF_SUBDIRS limited to the source trees that
+    # pdftex actually needs, so this recurse creates kpathsea, xpdf and
+    # web2c without walking disabled utilities.
     NPROC="${JOBS:-2}"
     echo "==> Cross build: -j$NPROC"
 

@@ -13,6 +13,8 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     outputs:
+      kandelo_repository: ${{ steps.metadata.outputs.kandelo_repository }}
+      kandelo_ref: ${{ steps.metadata.outputs.kandelo_ref }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
       should_publish: ${{ steps.trigger.outputs.should_publish }}
     steps:
@@ -25,13 +27,30 @@ jobs:
         id: metadata
         run: |
           set -euo pipefail
-          release_tag="$(jq -r '.release_tag // empty' gallery.json)"
+          release_tag="$(jq -r '.release_tag // empty' kandelo-abi.json)"
+          gallery_tag="$(jq -r '.release_tag // empty' gallery.json)"
           if [ -z "$release_tag" ] || ! [[ "$release_tag" =~ ^binaries-abi-v[0-9]+$ ]]; then
-            echo "gallery.json release_tag must be binaries-abi-v<N>, got ${release_tag:-missing}" >&2
+            echo "kandelo-abi.json release_tag must be binaries-abi-v<N>, got ${release_tag:-missing}" >&2
             exit 2
           fi
+          if [ "$gallery_tag" != "$release_tag" ]; then
+            echo "gallery.json release_tag $gallery_tag does not match kandelo-abi.json $release_tag" >&2
+            exit 2
+          fi
+          kandelo_repository="$(jq -r '.kandelo_repository // empty' kandelo-abi.json)"
+          kandelo_ref="$(jq -r '.kandelo_ref // empty' kandelo-abi.json)"
+          if [ -z "$kandelo_repository" ]; then
+            echo "kandelo-abi.json is missing kandelo_repository" >&2
+            exit 2
+          fi
+          if [ -z "$kandelo_ref" ]; then
+            echo "kandelo-abi.json is missing kandelo_ref" >&2
+            exit 2
+          fi
+          echo "kandelo_repository=$kandelo_repository" >> "$GITHUB_OUTPUT"
+          echo "kandelo_ref=$kandelo_ref" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "Resolved package source release tag $release_tag"
+          echo "Resolved Kandelo source $kandelo_repository@$kandelo_ref for $release_tag"
 
       - name: Classify publish trigger
         id: trigger
@@ -57,7 +76,7 @@ jobs:
             changed_files="$(gh api --paginate \
               "repos/$REPOSITORY/pulls/$PR_NUMBER/files" \
               --jq '.[].filename')"
-            publish_path_pattern='^(\.github/actions/prepare-kandelo/|\.github/workflows/(publish|publish-after-abi-bump|reusable-publish)\.ya?ml$|scripts/(build-and-publish|publish-archive|sync-packages|validate-abi-metadata)\.sh$)'
+            publish_path_pattern='^(\.github/actions/prepare-kandelo/|\.github/workflows/(publish|publish-after-abi-bump|reusable-publish)\.ya?ml$|scripts/(build-and-publish|publish-archive|resolve-publish-inputs|sync-packages|validate-abi-metadata)\.sh$|kandelo-abi\.json$)'
 
             if grep -Eq "$publish_path_pattern" <<<"$changed_files"; then
               should_publish=true
@@ -79,7 +98,8 @@ jobs:
     if: needs.resolve.result == 'success' && needs.resolve.outputs.should_publish == 'true'
     uses: ./.github/workflows/reusable-publish.yml
     with:
-      kandelo-ref: ${{ needs.resolve.outputs.release_tag }}
+      kandelo-repository: ${{ needs.resolve.outputs.kandelo_repository }}
+      kandelo-ref: ${{ needs.resolve.outputs.kandelo_ref }}
       packages: all
       release-tag: ${{ needs.resolve.outputs.release_tag }}
     secrets: inherit

@@ -5,7 +5,7 @@ version = "2025"
 # distribution macros + latex.fmt ride alongside pdftex.wasm). Bumped
 # from rev1 to invalidate any cached rev1 archives that only contain
 # pdftex.wasm.
-kernel_abi = 14
+kernel_abi = 15
 depends_on = ["zlib@1.3.1", "libpng@1.6.43"]
 
 [source]

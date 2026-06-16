@@ -44,6 +44,8 @@ HOST_TARGET=""
 BUILD_TIMESTAMP="$(git -C "$SOFTWARE_ROOT" log -1 --format=%aI HEAD 2>/dev/null || date -u +%FT%TZ)"
 BUILD_COMMIT="$(git -C "$SOFTWARE_ROOT" rev-parse HEAD 2>/dev/null || echo local)"
 BUILD_HOST="${REPOSITORY}@${BUILD_COMMIT}"
+TARGET_RELEASE_ASSETS_JSON="[]"
+TARGET_RELEASE_HAS_INDEX=false
 
 echo "build-and-publish: Kandelo ABI $ABI"
 echo "build-and-publish: target release $REPOSITORY/$TARGET_TAG"
@@ -105,6 +107,39 @@ publish_enabled() {
   [ "$enabled" != "false" ]
 }
 
+load_target_release_assets() {
+  if TARGET_RELEASE_ASSETS_JSON="$(gh release view "$TARGET_TAG" --repo "$REPOSITORY" --json assets --jq '[.assets[].name]' 2>/dev/null)"; then
+    if jq -e 'index("index.toml")' <<<"$TARGET_RELEASE_ASSETS_JSON" >/dev/null; then
+      TARGET_RELEASE_HAS_INDEX=true
+    fi
+  else
+    TARGET_RELEASE_ASSETS_JSON="[]"
+  fi
+}
+
+target_release_asset_present() {
+  local asset_name="$1"
+  jq -e --arg name "$asset_name" 'index($name)' <<<"$TARGET_RELEASE_ASSETS_JSON" >/dev/null
+}
+
+target_release_archive_present() {
+  local pkg="$1"
+  local suffix="$2"
+  jq -e --arg pre "${pkg}-" --arg suf "$suffix" 'any(.[]; startswith($pre) and endswith($suf))' <<<"$TARGET_RELEASE_ASSETS_JSON" >/dev/null
+}
+
+upload_gallery_metadata() {
+  if [ ! -f "$SOFTWARE_ROOT/gallery.json" ]; then
+    return 0
+  fi
+  if ! gh release view "$TARGET_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  gh release upload "$TARGET_TAG" --repo "$REPOSITORY" --clobber "$SOFTWARE_ROOT/gallery.json"
+  echo "build-and-publish: uploaded $TARGET_TAG/gallery.json"
+}
+
 host_target() {
   if [ -z "$HOST_TARGET" ]; then
     HOST_TARGET="$(rustc -vV | awk '/^host/ {print $2}')"
@@ -126,10 +161,12 @@ build_publish_one() {
   short="${sha:0:8}"
   suffix="-abi${ABI}-${arch}-${short}.tar.zst"
 
-  if gh release view "$TARGET_TAG" --repo "$REPOSITORY" --json assets --jq '[.assets[].name]' 2>/dev/null \
-      | jq -e --arg pre "${pkg}-" --arg suf "$suffix" 'any(.[]; startswith($pre) and endswith($suf))' >/dev/null; then
+  if target_release_archive_present "$pkg" "$suffix" && [ "$TARGET_RELEASE_HAS_INDEX" = true ]; then
     echo "build-and-publish: skip $pkg/$arch ($short already published)"
     return 0
+  fi
+  if target_release_archive_present "$pkg" "$suffix" ]; then
+    echo "build-and-publish: refresh $pkg/$arch ($short archive exists but index.toml is missing)"
   fi
 
   out_dir="${RUNNER_TEMP:-/tmp}/kandelo-software-staged/$pkg-$arch"
@@ -164,6 +201,16 @@ build_publish_one() {
     --archive-name "$archive_name" \
     --cache-key-sha "$sha"
 }
+
+load_target_release_assets
+if target_release_asset_present gallery.json; then
+  echo "build-and-publish: release gallery.json already published"
+elif gh release view "$TARGET_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+  echo "build-and-publish: release gallery.json missing; it will be uploaded after package checks"
+fi
+if [ "$TARGET_RELEASE_HAS_INDEX" != true ] && gh release view "$TARGET_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+  echo "build-and-publish: release index.toml missing; published archives will be refreshed"
+fi
 
 mapfile -t ordered <"$SOFTWARE_ROOT/packages.txt"
 for pkg in "${ordered[@]}"; do
@@ -207,3 +254,5 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
   printf '  %s\n' "${FAILED[@]}" >&2
   exit 1
 fi
+
+upload_gallery_metadata

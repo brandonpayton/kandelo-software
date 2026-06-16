@@ -67,9 +67,9 @@ The workflow checks out Kandelo, overlays `packages/*` into
 `packages/registry/*`, builds one package at a time with
 `xtask archive-stage`, and uploads each archive plus an updated
 `index.toml` to `binaries-abi-v<N>`. With an empty `kandelo-ref`, the
-workflow uses `gallery.json`'s `release_tag`; pass an explicit
-`kandelo-ref` such as `main` only when publishing against that ref's
-current ABI is intended.
+workflow uses `kandelo-abi.json`'s `kandelo_ref`; pass an explicit
+`kandelo-ref` only when publishing against another source ref is
+intended.
 
 The reusable workflow is `.github/workflows/reusable-publish.yml`; the
 setup logic is factored into `.github/actions/prepare-kandelo`.
@@ -90,36 +90,48 @@ When Kandelo bumps `ABI_VERSION`:
 
 1. The **Bump Kandelo ABI metadata** workflow can be triggered by
    `repository_dispatch` (`kandelo-abi-release` or `kandelo-abi-bump`)
-   from Kandelo, and also runs on a daily schedule. It detects the
-   latest durable Kandelo `binaries-abi-v<N>` release and opens an
-   `abi-bump` PR when this repository still targets an older ABI.
+   from Kandelo, and also runs on a daily schedule. It reads
+   `ABI_VERSION` from the configured Kandelo source ref (`main` by
+   default) and opens an `abi-bump` PR when this repository still
+   targets different ABI/source metadata.
 2. That workflow runs `scripts/bump-abi-metadata.sh --abi <N>` to update
-   every publishable `package.toml`, `gallery.json`, and ABI docs.
+   every publishable `package.toml`, `gallery.json`, `kandelo-abi.json`,
+   and ABI docs.
 3. Merging the `abi-bump` PR triggers **Publish after ABI bump**, which
-   rebuilds all packages against the matching Kandelo release tag and
+   rebuilds all packages against the recorded Kandelo source ref and
    publishes them to `binaries-abi-v<N>`.
-   The same workflow also retries the current ABI publish after merged
-   publish-pipeline fixes, or when a merged PR is labeled `abi-publish`.
+4. If the metadata already targets the new ABI but the
+   `binaries-abi-v<N>` release is missing `index.toml` or `gallery.json`,
+   the bump workflow invokes the publish workflow directly to rebuild or
+   repair the current ABI release.
+
+The publish workflow also retries the current ABI publish after merged
+publish-pipeline fixes, or when a merged PR is labeled `abi-publish`.
 
 For a local or one-off bump, run:
 
 ```bash
-bash scripts/bump-abi-metadata.sh --abi <N>
+bash scripts/bump-abi-metadata.sh --abi <N> --kandelo-ref main
 ```
 
 Do not hardcode the ABI in `build.toml`; its `index_url` must keep the
 `{abi}` placeholder.
 
-Kandelo can trigger the bump workflow directly after publishing a new
-durable ABI release with a repository dispatch payload like:
+Kandelo can trigger the bump workflow directly after changing
+`ABI_VERSION` with a repository dispatch payload like:
 
 ```json
 {
-  "event_type": "kandelo-abi-release",
+  "event_type": "kandelo-abi-bump",
   "client_payload": {
-    "abi": 14,
-    "release_tag": "binaries-abi-v14",
-    "kandelo_repository": "brandonpayton/wasm-posix-kernel"
+    "abi": 15,
+    "kandelo_repository": "brandonpayton/wasm-posix-kernel",
+    "kandelo_ref": "main"
   }
 }
 ```
+
+If Kandelo dispatches after cutting a durable `binaries-abi-v<N>` source
+tag, use `event_type: "kandelo-abi-release"` and include
+`"release_tag": "binaries-abi-v<N>"`; the bump workflow will validate
+that tag's `ABI_VERSION` before opening the PR.

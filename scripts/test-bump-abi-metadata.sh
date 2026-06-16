@@ -14,8 +14,16 @@ cp "$REPO_ROOT/gallery.json" "$TMP_ROOT/gallery.json"
 mkdir -p "$TMP_ROOT/docs"
 cp "$REPO_ROOT/docs/maintaining.md" "$TMP_ROOT/docs/maintaining.md"
 
-"$REPO_ROOT/scripts/bump-abi-metadata.sh" --software-root "$TMP_ROOT" --abi 11 >/dev/null
-"$REPO_ROOT/scripts/bump-abi-metadata.sh" --software-root "$TMP_ROOT" --abi 13 >/dev/null
+"$REPO_ROOT/scripts/bump-abi-metadata.sh" \
+  --software-root "$TMP_ROOT" \
+  --abi 11 \
+  --kandelo-repository example/kandelo \
+  --kandelo-ref refs/heads/abi-11 >/dev/null
+"$REPO_ROOT/scripts/bump-abi-metadata.sh" \
+  --software-root "$TMP_ROOT" \
+  --abi 13 \
+  --kandelo-repository example/kandelo \
+  --kandelo-ref refs/heads/abi-13 >/dev/null
 
 bad=0
 for package_file in "$TMP_ROOT"/packages/*/package.toml; do
@@ -31,8 +39,40 @@ if [ "$gallery_tag" != "binaries-abi-v13" ]; then
   bad=1
 fi
 
+metadata_abi="$(jq -r '.abi // empty' "$TMP_ROOT/kandelo-abi.json")"
+metadata_tag="$(jq -r '.release_tag // empty' "$TMP_ROOT/kandelo-abi.json")"
+metadata_repository="$(jq -r '.kandelo_repository // empty' "$TMP_ROOT/kandelo-abi.json")"
+metadata_ref="$(jq -r '.kandelo_ref // empty' "$TMP_ROOT/kandelo-abi.json")"
+if [ "$metadata_abi" != "13" ]; then
+  echo "test-bump-abi-metadata: expected kandelo-abi.json abi 13, got ${metadata_abi:-missing}" >&2
+  bad=1
+fi
+if [ "$metadata_tag" != "binaries-abi-v13" ]; then
+  echo "test-bump-abi-metadata: expected kandelo-abi.json release_tag binaries-abi-v13, got ${metadata_tag:-missing}" >&2
+  bad=1
+fi
+if [ "$metadata_repository" != "example/kandelo" ]; then
+  echo "test-bump-abi-metadata: expected kandelo_repository example/kandelo, got ${metadata_repository:-missing}" >&2
+  bad=1
+fi
+if [ "$metadata_ref" != "refs/heads/abi-13" ]; then
+  echo "test-bump-abi-metadata: expected kandelo_ref refs/heads/abi-13, got ${metadata_ref:-missing}" >&2
+  bad=1
+fi
+
 if ! grep -q 'set targets ABI 13' "$TMP_ROOT/docs/maintaining.md"; then
   echo "test-bump-abi-metadata: expected docs to target ABI 13" >&2
+  bad=1
+fi
+
+"$REPO_ROOT/scripts/bump-abi-metadata.sh" \
+  --software-root "$TMP_ROOT" \
+  --abi 13 \
+  --kandelo-repository example/kandelo \
+  --kandelo-ref refs/tags/abi-13 >/dev/null
+metadata_ref="$(jq -r '.kandelo_ref // empty' "$TMP_ROOT/kandelo-abi.json")"
+if [ "$metadata_ref" != "refs/tags/abi-13" ]; then
+  echo "test-bump-abi-metadata: expected same-ABI source ref update to refs/tags/abi-13, got ${metadata_ref:-missing}" >&2
   bad=1
 fi
 
@@ -43,7 +83,11 @@ snapshot() {
 }
 
 before="$(snapshot)"
-"$REPO_ROOT/scripts/bump-abi-metadata.sh" --software-root "$TMP_ROOT" --abi 13 >/dev/null
+"$REPO_ROOT/scripts/bump-abi-metadata.sh" \
+  --software-root "$TMP_ROOT" \
+  --abi 13 \
+  --kandelo-repository example/kandelo \
+  --kandelo-ref refs/tags/abi-13 >/dev/null
 after="$(snapshot)"
 if [ "$before" != "$after" ]; then
   echo "test-bump-abi-metadata: ABI 13 bump is not idempotent" >&2

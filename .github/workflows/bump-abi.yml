@@ -6,13 +6,17 @@ on:
   workflow_dispatch:
     inputs:
       abi:
-        description: Optional ABI override. Empty means latest durable Kandelo release.
+        description: Optional ABI override. Empty means read ABI_VERSION from the Kandelo source ref.
         type: string
         default: ""
       kandelo-repository:
-        description: Kandelo repository to inspect for binaries-abi-v<N> releases.
+        description: Kandelo repository to inspect for ABI_VERSION.
         type: string
         default: brandonpayton/wasm-posix-kernel
+      kandelo-ref:
+        description: Kandelo source ref to inspect when no dispatch ref is provided.
+        type: string
+        default: main
   schedule:
     - cron: "17 8 * * *"
 
@@ -24,51 +28,117 @@ permissions:
 jobs:
   bump:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.bump.outputs.changed }}
+      release_complete: ${{ steps.release.outputs.release_complete }}
+      release_tag: ${{ steps.abi.outputs.release_tag }}
+      kandelo_repository: ${{ steps.abi.outputs.kandelo_repository }}
+      kandelo_ref: ${{ steps.abi.outputs.kandelo_ref }}
     steps:
       - name: Checkout kandelo-software
         uses: actions/checkout@v4
 
-      - name: Resolve target ABI
-        id: abi
+      - name: Resolve Kandelo source
+        id: source
         env:
-          GH_TOKEN: ${{ github.token }}
-          INPUT_ABI: ${{ inputs.abi || '' }}
-          KANDELO_REPOSITORY: ${{ inputs.kandelo-repository || 'brandonpayton/wasm-posix-kernel' }}
-          DISPATCH_ABI: ${{ github.event.client_payload.abi || '' }}
+          INPUT_KANDELO_REPOSITORY: ${{ inputs.kandelo-repository || 'brandonpayton/wasm-posix-kernel' }}
+          INPUT_KANDELO_REF: ${{ inputs.kandelo-ref || 'main' }}
+          DISPATCH_EVENT_TYPE: ${{ github.event.action || '' }}
           DISPATCH_RELEASE_TAG: ${{ github.event.client_payload.release_tag || '' }}
           DISPATCH_KANDELO_REPOSITORY: ${{ github.event.client_payload.kandelo_repository || github.event.client_payload.repository || '' }}
+          DISPATCH_KANDELO_REF: ${{ github.event.client_payload.kandelo_ref || '' }}
+          DISPATCH_REF: ${{ github.event.client_payload.ref || '' }}
+          DISPATCH_KANDELO_SHA: ${{ github.event.client_payload.kandelo_sha || github.event.client_payload.sha || '' }}
         run: |
           set -euo pipefail
-          repository="$KANDELO_REPOSITORY"
+          repository="$INPUT_KANDELO_REPOSITORY"
           if [ -n "$DISPATCH_KANDELO_REPOSITORY" ]; then
             repository="$DISPATCH_KANDELO_REPOSITORY"
           fi
 
-          if [ -n "$INPUT_ABI" ]; then
-            abi="$INPUT_ABI"
-          elif [ -n "$DISPATCH_ABI" ]; then
-            abi="$DISPATCH_ABI"
-          elif [[ "$DISPATCH_RELEASE_TAG" =~ ^binaries-abi-v([0-9]+)$ ]]; then
-            abi="${BASH_REMATCH[1]}"
-          else
-            abi="$(bash scripts/latest-kandelo-abi.sh --repo "$repository")"
+          source_ref="$INPUT_KANDELO_REF"
+          if [ -n "$DISPATCH_KANDELO_SHA" ]; then
+            source_ref="$DISPATCH_KANDELO_SHA"
+          elif [ -n "$DISPATCH_KANDELO_REF" ]; then
+            source_ref="$DISPATCH_KANDELO_REF"
+          elif [ -n "$DISPATCH_REF" ]; then
+            source_ref="$DISPATCH_REF"
+          elif [ "$DISPATCH_EVENT_TYPE" = "kandelo-abi-release" ] && [ -n "$DISPATCH_RELEASE_TAG" ]; then
+            source_ref="$DISPATCH_RELEASE_TAG"
           fi
+
+          if [ -z "$source_ref" ]; then
+            echo "Kandelo source ref is required" >&2
+            exit 2
+          fi
+
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved Kandelo source $repository@$source_ref"
+
+      - name: Checkout Kandelo source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ steps.source.outputs.ref }}
+          path: kandelo
+          submodules: false
+
+      - name: Resolve target ABI
+        id: abi
+        env:
+          INPUT_ABI: ${{ inputs.abi || '' }}
+          DISPATCH_ABI: ${{ github.event.client_payload.abi || '' }}
+          DISPATCH_RELEASE_TAG: ${{ github.event.client_payload.release_tag || '' }}
+          KANDELO_REPOSITORY: ${{ steps.source.outputs.repository }}
+          KANDELO_REF: ${{ steps.source.outputs.ref }}
+        run: |
+          set -euo pipefail
+          source_abi="$(grep -oE 'ABI_VERSION: u32 = [0-9]+' kandelo/crates/shared/src/lib.rs | awk '{print $4}' || true)"
+          if [ -z "$source_abi" ]; then
+            echo "Could not read Kandelo ABI_VERSION from $KANDELO_REPOSITORY@$KANDELO_REF" >&2
+            exit 2
+          fi
+
+          requested_abi=""
+          if [ -n "$INPUT_ABI" ]; then
+            requested_abi="$INPUT_ABI"
+          elif [ -n "$DISPATCH_ABI" ]; then
+            requested_abi="$DISPATCH_ABI"
+          elif [[ "$DISPATCH_RELEASE_TAG" =~ ^binaries-abi-v([0-9]+)$ ]]; then
+            requested_abi="${BASH_REMATCH[1]}"
+          fi
+
+          abi="${requested_abi:-$source_abi}"
           if ! [[ "$abi" =~ ^[0-9]+$ ]]; then
             echo "invalid ABI: $abi" >&2
             exit 2
           fi
+          if [ "$abi" != "$source_abi" ]; then
+            echo "requested ABI $abi does not match Kandelo ABI_VERSION $source_abi at $KANDELO_REPOSITORY@$KANDELO_REF" >&2
+            exit 2
+          fi
+
+          kandelo_commit="$(git -C kandelo rev-parse HEAD)"
           echo "abi=$abi" >> "$GITHUB_OUTPUT"
           echo "release_tag=binaries-abi-v$abi" >> "$GITHUB_OUTPUT"
-          echo "kandelo_repository=$repository" >> "$GITHUB_OUTPUT"
-          echo "Resolved Kandelo ABI $abi from $repository"
+          echo "kandelo_repository=$KANDELO_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "kandelo_ref=$KANDELO_REF" >> "$GITHUB_OUTPUT"
+          echo "kandelo_commit=$kandelo_commit" >> "$GITHUB_OUTPUT"
+          echo "Resolved Kandelo ABI $abi from $KANDELO_REPOSITORY@$KANDELO_REF ($kandelo_commit)"
 
       - name: Bump ABI metadata
         id: bump
         env:
           ABI: ${{ steps.abi.outputs.abi }}
+          KANDELO_REPOSITORY: ${{ steps.abi.outputs.kandelo_repository }}
+          KANDELO_REF: ${{ steps.abi.outputs.kandelo_ref }}
         run: |
           set -euo pipefail
-          bash scripts/bump-abi-metadata.sh --abi "$ABI"
+          bash scripts/bump-abi-metadata.sh \
+            --abi "$ABI" \
+            --kandelo-repository "$KANDELO_REPOSITORY" \
+            --kandelo-ref "$KANDELO_REF"
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Package metadata already targets ABI $ABI."
@@ -93,6 +163,17 @@ jobs:
           bash scripts/test-bump-abi-metadata.sh
           bash scripts/test-publish-inputs.sh
           bash scripts/test-publish-policy.sh
+          bash scripts/test-release-assets.sh
+
+      - name: Check target release assets
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.abi.outputs.release_tag }}
+        run: |
+          bash scripts/check-release-assets.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --release-tag "$RELEASE_TAG"
 
       - name: Open or update ABI bump PR
         if: steps.bump.outputs.changed == 'true'
@@ -101,6 +182,8 @@ jobs:
           ABI: ${{ steps.abi.outputs.abi }}
           RELEASE_TAG: ${{ steps.abi.outputs.release_tag }}
           KANDELO_REPOSITORY: ${{ steps.abi.outputs.kandelo_repository }}
+          KANDELO_REF: ${{ steps.abi.outputs.kandelo_ref }}
+          KANDELO_COMMIT: ${{ steps.abi.outputs.kandelo_commit }}
         run: |
           set -euo pipefail
           branch="automation/bump-abi-$ABI"
@@ -114,13 +197,15 @@ jobs:
           - keep docs in sync with the current package ABI
 
           ## Source
-          Latest durable Kandelo release detected from \`$KANDELO_REPOSITORY\`: \`$RELEASE_TAG\`.
+          Kandelo ABI source: \`$KANDELO_REPOSITORY@$KANDELO_REF\`.
+          Resolved source commit: \`$KANDELO_COMMIT\`.
 
           ## Verification
           - \`scripts/validate-abi-metadata.sh\`
           - \`scripts/test-bump-abi-metadata.sh\`
           - \`scripts/test-publish-inputs.sh\`
           - \`scripts/test-publish-policy.sh\`
+          - \`scripts/test-release-assets.sh\`
 
           Merging this PR triggers the full package publish workflow for \`$RELEASE_TAG\`.
           EOF
@@ -128,7 +213,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
-          git add packages gallery.json docs/maintaining.md
+          git add packages gallery.json docs/maintaining.md kandelo-abi.json
           git commit -m "Bump package metadata for Kandelo ABI $ABI"
           if remote_sha="$(git ls-remote --heads origin "$branch" | awk '{print $1}')" && [ -n "$remote_sha" ]; then
             git push --force-with-lease="refs/heads/$branch:$remote_sha" origin "$branch"
@@ -152,3 +237,14 @@ jobs:
               --body-file "$body_file" \
               --label abi-bump
           fi
+
+  publish-current:
+    needs: bump
+    if: needs.bump.outputs.changed == 'false' && needs.bump.outputs.release_complete != 'true'
+    uses: ./.github/workflows/reusable-publish.yml
+    with:
+      kandelo-repository: ${{ needs.bump.outputs.kandelo_repository }}
+      kandelo-ref: ${{ needs.bump.outputs.kandelo_ref }}
+      packages: all
+      release-tag: ${{ needs.bump.outputs.release_tag }}
+    secrets: inherit

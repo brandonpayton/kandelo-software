@@ -79,6 +79,16 @@ read_gallery_tag() {
   fi
 }
 
+read_json_field() {
+  local file="$1"
+  local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg field "$field" '.[$field] // empty' "$file"
+  else
+    sed -nE 's/^[[:space:]]*"'"$field"'"[[:space:]]*:[[:space:]]*"?([^",}]*)"?[,]?[[:space:]]*$/\1/p' "$file" | head -1
+  fi
+}
+
 read_script_paths() {
   local file="$1"
   sed -nE 's/^[[:space:]]*script_path[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$file"
@@ -143,6 +153,34 @@ if [ -f "$SOFTWARE_ROOT/gallery.json" ]; then
   gallery_tag="$(read_gallery_tag "$SOFTWARE_ROOT/gallery.json")"
   if [ "$gallery_tag" != "$TARGET_TAG" ]; then
     echo "validate-abi-metadata: gallery.json has release_tag=${gallery_tag:-missing}; expected $TARGET_TAG" >&2
+    mismatch=1
+  fi
+fi
+
+metadata_file="$SOFTWARE_ROOT/kandelo-abi.json"
+if [ ! -f "$metadata_file" ]; then
+  echo "validate-abi-metadata: source metadata missing: $metadata_file" >&2
+  mismatch=1
+else
+  metadata_abi="$(read_json_field "$metadata_file" abi)"
+  metadata_tag="$(read_json_field "$metadata_file" release_tag)"
+  metadata_repository="$(read_json_field "$metadata_file" kandelo_repository)"
+  metadata_ref="$(read_json_field "$metadata_file" kandelo_ref)"
+
+  if [ "$metadata_abi" != "$ABI" ]; then
+    echo "validate-abi-metadata: kandelo-abi.json has abi=${metadata_abi:-missing}; expected $ABI" >&2
+    mismatch=1
+  fi
+  if [ "$metadata_tag" != "$TARGET_TAG" ]; then
+    echo "validate-abi-metadata: kandelo-abi.json has release_tag=${metadata_tag:-missing}; expected $TARGET_TAG" >&2
+    mismatch=1
+  fi
+  if [ -z "$metadata_repository" ]; then
+    echo "validate-abi-metadata: kandelo-abi.json is missing kandelo_repository" >&2
+    mismatch=1
+  fi
+  if [ -z "$metadata_ref" ]; then
+    echo "validate-abi-metadata: kandelo-abi.json is missing kandelo_ref" >&2
     mismatch=1
   fi
 fi

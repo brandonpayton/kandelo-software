@@ -34,19 +34,23 @@ at publish time.
 
 For packages with a `[build]` block, `kernel_abi` must match the
 Kandelo `ABI_VERSION` used by the publish workflow. The current package
-set targets ABI 14.
+set targets ABI 15.
 
-Use `scripts/bump-abi-metadata.sh --abi <N>` to update the package set
-for a new Kandelo ABI. The scheduled **Bump Kandelo ABI metadata**
-workflow runs the same script after detecting a new durable Kandelo
-`binaries-abi-v<N>` release, then opens an `abi-bump` PR. Merging that
-PR triggers the full package publish workflow for the matching release
-tag.
+Use `scripts/bump-abi-metadata.sh --abi <N> --kandelo-ref main` to
+update the package set for a new Kandelo ABI. The scheduled **Bump
+Kandelo ABI metadata** workflow reads `ABI_VERSION` from the configured
+Kandelo source ref, updates `kandelo-abi.json`, and opens an `abi-bump`
+PR when the package metadata changed. Merging that PR triggers the full
+package publish workflow for the recorded Kandelo source ref and matching
+`binaries-abi-v<N>` release tag. If the metadata is already current but
+that release is missing `index.toml` or `gallery.json`, the bump workflow
+publishes the current ABI directly.
 
 If an ABI publish fails before the release is complete, merge the fix
 through a publish-pipeline path such as `.github/actions/prepare-kandelo/`
 or label the fix PR `abi-publish`; either signal retries the current ABI
-publish after merge.
+publish after merge. Re-running the publish workflow also repairs a
+missing `gallery.json` when the package archives are already present.
 
 `build.toml` should use the indexed binary form:
 

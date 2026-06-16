@@ -10,13 +10,15 @@ cleanup() {
 trap cleanup EXIT
 
 cp "$REPO_ROOT/gallery.json" "$TMP_ROOT/gallery.json"
+cp "$REPO_ROOT/kandelo-abi.json" "$TMP_ROOT/kandelo-abi.json"
 
 run_case() {
   local name="$1"
-  local expected_ref="$2"
-  local expected_packages="$3"
-  local expected_tag="$4"
-  shift 4
+  local expected_repository="$2"
+  local expected_ref="$3"
+  local expected_packages="$4"
+  local expected_tag="$5"
+  shift 5
 
   local output_file="$TMP_ROOT/$name.outputs"
   GITHUB_OUTPUT="$output_file" \
@@ -25,10 +27,16 @@ run_case() {
       "$@" >/dev/null
 
   local actual_ref actual_packages actual_tag
+  local actual_repository
+  actual_repository="$(sed -nE 's/^kandelo_repository=(.*)$/\1/p' "$output_file")"
   actual_ref="$(sed -nE 's/^kandelo_ref=(.*)$/\1/p' "$output_file")"
   actual_packages="$(sed -nE 's/^packages=(.*)$/\1/p' "$output_file")"
   actual_tag="$(sed -nE 's/^release_tag=(.*)$/\1/p' "$output_file")"
 
+  if [ "$actual_repository" != "$expected_repository" ]; then
+    echo "test-publish-inputs: $name kandelo_repository=$actual_repository; expected $expected_repository" >&2
+    return 1
+  fi
   if [ "$actual_ref" != "$expected_ref" ]; then
     echo "test-publish-inputs: $name kandelo_ref=$actual_ref; expected $expected_ref" >&2
     return 1
@@ -44,9 +52,12 @@ run_case() {
 }
 
 gallery_tag="$(jq -r '.release_tag // empty' "$TMP_ROOT/gallery.json")"
+source_repository="$(jq -r '.kandelo_repository // empty' "$TMP_ROOT/kandelo-abi.json")"
+source_ref="$(jq -r '.kandelo_ref // empty' "$TMP_ROOT/kandelo-abi.json")"
 
-run_case default "$gallery_tag" all "$gallery_tag"
-run_case explicit-main main redis "" --kandelo-ref main --packages redis --release-tag ""
-run_case explicit-tag binaries-abi-v14 all binaries-abi-v14 --release-tag binaries-abi-v14
+run_case default "$source_repository" "$source_ref" all "$gallery_tag"
+run_case explicit-main "$source_repository" main redis "" --kandelo-ref main --packages redis --release-tag ""
+run_case explicit-repo example/kandelo "$source_ref" all "$gallery_tag" --kandelo-repository example/kandelo
+run_case explicit-tag "$source_repository" binaries-abi-v14 all binaries-abi-v14 --release-tag binaries-abi-v14
 
 echo "test-publish-inputs: publish input resolution OK"

@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       kandelo-ref:
-        description: Kandelo git ref to build against. Empty uses gallery.json release_tag.
+        description: Kandelo git ref to build against. Empty uses kandelo-abi.json source metadata.
+        type: string
+        default: ""
+      kandelo-repository:
+        description: Kandelo repository to build against. Empty uses kandelo-abi.json source metadata.
         type: string
         default: ""
       packages:
@@ -25,6 +29,7 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     outputs:
+      kandelo_repository: ${{ steps.inputs.outputs.kandelo_repository }}
       kandelo_ref: ${{ steps.inputs.outputs.kandelo_ref }}
       packages: ${{ steps.inputs.outputs.packages }}
       release_tag: ${{ steps.inputs.outputs.release_tag }}
@@ -36,11 +41,13 @@ jobs:
         id: inputs
         env:
           INPUT_KANDELO_REF: ${{ inputs.kandelo-ref || '' }}
+          INPUT_KANDELO_REPOSITORY: ${{ inputs.kandelo-repository || '' }}
           INPUT_PACKAGES: ${{ inputs.packages || 'all' }}
           INPUT_RELEASE_TAG: ${{ inputs.release-tag || '' }}
         run: |
           bash scripts/resolve-publish-inputs.sh \
             --kandelo-ref "$INPUT_KANDELO_REF" \
+            --kandelo-repository "$INPUT_KANDELO_REPOSITORY" \
             --packages "$INPUT_PACKAGES" \
             --release-tag "$INPUT_RELEASE_TAG"
 
@@ -48,6 +55,7 @@ jobs:
     needs: resolve
     uses: ./.github/workflows/reusable-publish.yml
     with:
+      kandelo-repository: ${{ needs.resolve.outputs.kandelo_repository }}
       kandelo-ref: ${{ needs.resolve.outputs.kandelo_ref }}
       packages: ${{ needs.resolve.outputs.packages }}
       release-tag: ${{ needs.resolve.outputs.release_tag }}

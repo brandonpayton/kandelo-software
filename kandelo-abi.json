@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "abi": 15,
-  "release_tag": "binaries-abi-v15",
+  "abi": 16,
+  "release_tag": "binaries-abi-v16",
   "kandelo_repository": "brandonpayton/wasm-posix-kernel",
-  "kandelo_ref": "binaries-abi-v15"
+  "kandelo_ref": "main"
 }

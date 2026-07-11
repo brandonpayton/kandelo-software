@@ -1,7 +1,7 @@
 kind = "program"
 name = "redis"
 version = "7.2.7"
-kernel_abi = 15
+kernel_abi = 16
 depends_on = []
 
 [source]

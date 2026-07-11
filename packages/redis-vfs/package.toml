@@ -1,7 +1,7 @@
 kind = "program"
 name = "redis-vfs"
 version = "0.1.0"
-kernel_abi = 15
+kernel_abi = 16
 depends_on = ["redis@7.2.7", "dinit@0.19.4"]
 
 # Pre-built VFS image for the browser Redis demo. Source at

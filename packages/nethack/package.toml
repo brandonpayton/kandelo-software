@@ -1,7 +1,7 @@
 kind = "program"
 name = "nethack"
 version = "3.6.7"
-kernel_abi = 15
+kernel_abi = 42
 depends_on = ["ncurses@6.5"]
 
 [source]
